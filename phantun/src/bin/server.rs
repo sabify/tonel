@@ -181,6 +181,7 @@ async fn main() -> io::Result<()> {
         .get_one::<String>("handshake_packet")
         .map(fs::read)
         .transpose()?;
+    let handshake_packet = Arc::new(handshake_packet);
 
     let tun = TunBuilder::new()
         .name(tun_name) // if name is empty, then it is set by kernel.
@@ -210,29 +211,10 @@ async fn main() -> io::Result<()> {
 
             let mut buf_tcp = [0u8; MAX_PACKET_LEN];
 
-            if let Some(ref packet) = handshake_packet {
-                // discard the hadshake packet as it not part of the underlying logic
-                match tcp_sock.recv(&mut buf_tcp).await {
-                    Some(size) => {
-                        if size == 0 {
-                            debug!("Received EOF on handshake, closing connection");
-                            continue;
-                        }
-                    }
-                    None => {
-                        debug!("TCP connection closed on handshake, closing connection");
-                        continue;
-                    }
-                }
-
-                debug!("Received handshake packet to: {}", tcp_sock);
-
-                if tcp_sock.send(packet).await.is_none() {
-                    error!("Failed to send handshake packet to remote, closing connection.");
-                    continue;
-                }
-
-                debug!("Sent handshake packet to: {}", tcp_sock);
+            let mut should_receive_handshake_packet = false;
+            let handshake_packet = handshake_packet.clone();
+            if handshake_packet.is_some() {
+                should_receive_handshake_packet = true;
             }
 
             let udp_sock = UdpSocket::bind(if remote_addr.is_ipv4() {
@@ -336,6 +318,21 @@ async fn main() -> io::Result<()> {
                                     if size == 0 {
                                         debug!("Received EOF from {local_addr}, closing connection");
                                         break;
+                                    }
+                                    // discard handshake packet since it is not related to
+                                    // underlying logic
+                                    if should_receive_handshake_packet {
+                                        should_receive_handshake_packet = false;
+                                        if let Some(ref p) = *handshake_packet {
+                                            if tcp_sock.send(p).await.is_none() {
+                                                error!("Failed to send handshake packet to remote, closing connection.");
+                                                break;
+                                            }
+
+                                            debug!("Sent handshake packet to: {}", tcp_sock);
+                                            continue;
+                                        }
+
                                     }
                                     udp_sock_index = (udp_sock_index + 1) % udp_socks_amount;
                                     let udp_sock = udp_socks[udp_sock_index].clone();

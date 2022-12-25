@@ -399,41 +399,15 @@ async fn tcp_connect(
         }
     };
 
-    let mut buf_tcp = [0u8; MAX_PACKET_LEN];
+    let mut should_receive_handshake_packet = false;
     if let Some(ref packet) = *handshake_packet {
+        should_receive_handshake_packet = true;
         if tcp_sock.send(packet).await.is_none() {
             error!("Failed to send handshake packet to remote, closing connection.");
             let _ = tcp_requested.send_async(()).await;
             return;
         }
-
         debug!("Sent handshake packet to: {}", tcp_sock);
-
-        // discard the hadshake packet as it not part of the underlying logic
-        match tcp_sock.recv(&mut buf_tcp).await {
-            Some(size) => {
-                if size == 0 {
-                    debug!("Received EOF from {addr} on handshake, closing connection");
-                    let _ = tcp_requested.send_async(()).await;
-                    return;
-                }
-            }
-            None => {
-                debug!("TCP connection closed from {addr} on handshake, closing connection");
-                let _ = tcp_requested.send_async(()).await;
-                return;
-            }
-        }
-
-        debug!("Received handshake packet to: {}", tcp_sock);
-    }
-
-    if let Some(ref packet) = first_packet {
-        if tcp_sock.send(packet).await.is_none() {
-            error!("Failed to send first packet to remote, closing connection.");
-            let _ = tcp_requested.send_async(()).await;
-            return;
-        }
     }
 
     let sock_index;
@@ -444,6 +418,7 @@ async fn tcp_connect(
     }
 
     tokio::spawn(async move {
+        let mut buf_tcp = [0u8; MAX_PACKET_LEN];
         loop {
             tokio::select! {
                 biased;
@@ -457,6 +432,21 @@ async fn tcp_connect(
                             if size == 0 {
                                 debug!("Received EOF from {addr}, closing connection {sock_index}");
                                 break;
+                            }
+                            // discard the hadshake packet as it not part of the underlying logic
+                            if should_receive_handshake_packet {
+                                should_receive_handshake_packet = false;
+                                debug!("Received handshake packet to: {}", tcp_sock);
+
+                                if let Some(ref packet) = first_packet {
+                                    if tcp_sock.send(packet).await.is_none() {
+                                        error!("Failed to send first packet to remote, closing connection.");
+                                        let _ = tcp_requested.send_async(()).await;
+                                        return;
+                                    }
+                                }
+
+                                continue;
                             }
                             let udp_sock_index = udp_sock_index.fetch_add(1, Ordering::SeqCst) % udp_socks.len();
                             let udp_sock = udp_socks[udp_sock_index].clone();
