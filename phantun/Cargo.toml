@@ -32,6 +32,7 @@ tokio-tun = "0.7"
 num_cpus = "1.13"
 neli = "0.6"
 nix = "0.26"
+flume = "0.10"
 
 [dev-dependencies]
 rand = "0.8.5"

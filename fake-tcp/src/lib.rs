@@ -149,6 +149,14 @@ impl Socket {
         )
     }
 
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
+    pub fn remote_addr(&self) -> SocketAddr {
+        self.remote_addr
+    }
+
     fn build_tcp_packet(&self, flags: u16, payload: Option<&[u8]>) -> Bytes {
         let ack = self.ack.load(Ordering::SeqCst);
         self.last_ack.store(ack, Ordering::SeqCst);

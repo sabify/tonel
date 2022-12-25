@@ -207,8 +207,27 @@ async fn main() -> io::Result<()> {
         'main_loop: loop {
             let tcp_sock = Arc::new(stack.accept().await);
             info!("New connection: {}", tcp_sock);
-            if let Some(ref p) = handshake_packet {
-                if tcp_sock.send(p).await.is_none() {
+
+            let mut buf_tcp = [0u8; MAX_PACKET_LEN];
+
+            if let Some(ref packet) = handshake_packet {
+                // discard the hadshake packet as it not part of the underlying logic
+                match tcp_sock.recv(&mut buf_tcp).await {
+                    Some(size) => {
+                        if size == 0 {
+                            debug!("Received EOF on handshake, closing connection");
+                            continue;
+                        }
+                    }
+                    None => {
+                        debug!("TCP connection closed on handshake, closing connection");
+                        continue;
+                    }
+                }
+
+                debug!("Received handshake packet to: {}", tcp_sock);
+
+                if tcp_sock.send(packet).await.is_none() {
                     error!("Failed to send handshake packet to remote, closing connection.");
                     continue;
                 }
@@ -302,7 +321,6 @@ async fn main() -> io::Result<()> {
             let packet_received = packet_received.clone();
             let cancellation = cancellation.clone();
             tokio::spawn(async move {
-                let mut buf_tcp = [0u8; MAX_PACKET_LEN];
                 let mut udp_sock_index = 0;
 
                 loop {
