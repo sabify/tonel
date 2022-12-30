@@ -1,9 +1,9 @@
-use bytes::{Bytes, BytesMut};
 use internet_checksum::Checksum;
 use pnet::packet::Packet;
 use pnet::packet::{ip, ipv4, ipv6, tcp};
 use std::convert::TryInto;
 use std::net::{IpAddr, SocketAddr};
+use zeroize::Zeroize;
 
 const IPV4_HEADER_LEN: usize = 20;
 const IPV6_HEADER_LEN: usize = 40;
@@ -32,13 +32,14 @@ impl<'a> IPPacket<'a> {
 }
 
 pub fn build_tcp_packet(
+    buf: &mut [u8],
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
     seq: u32,
     ack: u32,
     flags: u16,
     payload: Option<&[u8]>,
-) -> Bytes {
+) -> usize {
     let ip_header_len = match local_addr {
         SocketAddr::V4(_) => IPV4_HEADER_LEN,
         SocketAddr::V6(_) => IPV6_HEADER_LEN,
@@ -47,15 +48,11 @@ pub fn build_tcp_packet(
     let tcp_header_len = TCP_HEADER_LEN + if wscale { 4 } else { 0 }; // nop + wscale
     let tcp_total_len = tcp_header_len + payload.map_or(0, |payload| payload.len());
     let total_len = ip_header_len + tcp_total_len;
-    let mut buf = BytesMut::zeroed(total_len);
-
-    let mut ip_buf = buf.split_to(ip_header_len);
-    let mut tcp_buf = buf.split_to(tcp_total_len);
-    assert_eq!(0, buf.len());
+    (&mut buf[..total_len]).zeroize();
 
     match (local_addr, remote_addr) {
         (SocketAddr::V4(local), SocketAddr::V4(remote)) => {
-            let mut v4 = ipv4::MutableIpv4Packet::new(&mut ip_buf).unwrap();
+            let mut v4 = ipv4::MutableIpv4Packet::new(&mut buf[..ip_header_len]).unwrap();
             v4.set_version(4);
             v4.set_header_length(IPV4_HEADER_LEN as u8 / 4);
             v4.set_next_level_protocol(ip::IpNextHeaderProtocols::Tcp);
@@ -69,7 +66,7 @@ pub fn build_tcp_packet(
             v4.set_checksum(u16::from_be_bytes(cksm.checksum()));
         }
         (SocketAddr::V6(local), SocketAddr::V6(remote)) => {
-            let mut v6 = ipv6::MutableIpv6Packet::new(&mut ip_buf).unwrap();
+            let mut v6 = ipv6::MutableIpv6Packet::new(&mut buf[..ip_header_len]).unwrap();
             v6.set_version(6);
             v6.set_payload_length(tcp_total_len.try_into().unwrap());
             v6.set_next_header(ip::IpNextHeaderProtocols::Tcp);
@@ -80,7 +77,7 @@ pub fn build_tcp_packet(
         _ => unreachable!(),
     };
 
-    let mut tcp = tcp::MutableTcpPacket::new(&mut tcp_buf).unwrap();
+    let mut tcp = tcp::MutableTcpPacket::new(&mut buf[ip_header_len..total_len]).unwrap();
     tcp.set_window(0xffff);
     tcp.set_source(local_addr.port());
     tcp.set_destination(remote_addr.port());
@@ -123,26 +120,25 @@ pub fn build_tcp_packet(
     cksm.add_bytes(tcp.packet());
     tcp.set_checksum(u16::from_be_bytes(cksm.checksum()));
 
-    ip_buf.unsplit(tcp_buf);
-    ip_buf.freeze()
+    total_len
 }
 
-pub fn parse_ip_packet(buf: &Bytes) -> Option<(IPPacket, tcp::TcpPacket)> {
+pub fn parse_ip_packet(buf: &[u8]) -> Option<(IPPacket, tcp::TcpPacket)> {
     if buf[0] >> 4 == 4 {
-        let v4 = ipv4::Ipv4Packet::new(buf).unwrap();
+        let v4 = ipv4::Ipv4Packet::new(buf)?;
         if v4.get_next_level_protocol() != ip::IpNextHeaderProtocols::Tcp {
             return None;
         }
 
-        let tcp = tcp::TcpPacket::new(&buf[IPV4_HEADER_LEN..]).unwrap();
+        let tcp = tcp::TcpPacket::new(&buf[IPV4_HEADER_LEN..])?;
         Some((IPPacket::V4(v4), tcp))
     } else if buf[0] >> 4 == 6 {
-        let v6 = ipv6::Ipv6Packet::new(buf).unwrap();
+        let v6 = ipv6::Ipv6Packet::new(buf)?;
         if v6.get_next_header() != ip::IpNextHeaderProtocols::Tcp {
             return None;
         }
 
-        let tcp = tcp::TcpPacket::new(&buf[IPV6_HEADER_LEN..]).unwrap();
+        let tcp = tcp::TcpPacket::new(&buf[IPV6_HEADER_LEN..])?;
         Some((IPPacket::V6(v6), tcp))
     } else {
         None
@@ -160,8 +156,10 @@ mod benchmarks {
         let local_addr = "127.0.0.1:1234".parse().unwrap();
         let remote_addr = "127.0.0.2:1234".parse().unwrap();
         let payload = black_box([123u8; 1460]);
+        let mut buf = black_box([0u8; MAX_PACKET_LEN]);
         b.iter(|| {
             build_tcp_packet(
+                &mut buf,
                 local_addr,
                 remote_addr,
                 123,
@@ -177,8 +175,10 @@ mod benchmarks {
         let local_addr = "127.0.0.1:1234".parse().unwrap();
         let remote_addr = "127.0.0.2:1234".parse().unwrap();
         let payload = black_box([123u8; 512]);
+        let mut buf = black_box([0u8; MAX_PACKET_LEN]);
         b.iter(|| {
             build_tcp_packet(
+                &mut buf,
                 local_addr,
                 remote_addr,
                 123,
@@ -194,8 +194,10 @@ mod benchmarks {
         let local_addr = "127.0.0.1:1234".parse().unwrap();
         let remote_addr = "127.0.0.2:1234".parse().unwrap();
         let payload = black_box([123u8; 128]);
+        let mut buf = black_box([0u8; MAX_PACKET_LEN]);
         b.iter(|| {
             build_tcp_packet(
+                &mut buf,
                 local_addr,
                 remote_addr,
                 123,

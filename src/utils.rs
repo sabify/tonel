@@ -12,7 +12,7 @@ use neli::{
 use std::net::{Ipv6Addr, SocketAddr};
 use tokio::net::UdpSocket;
 
-pub fn new_udp_reuseport(local_addr: SocketAddr) -> UdpSocket {
+pub fn new_udp_reuseport(local_addr: SocketAddr) -> std::io::Result<UdpSocket> {
     let udp_sock = socket2::Socket::new(
         if local_addr.is_ipv4() {
             socket2::Domain::IPV4
@@ -21,15 +21,14 @@ pub fn new_udp_reuseport(local_addr: SocketAddr) -> UdpSocket {
         },
         socket2::Type::DGRAM,
         None,
-    )
-    .unwrap();
-    udp_sock.set_reuse_port(true).unwrap();
+    )?;
+    udp_sock.set_reuse_port(true)?;
     // from tokio-rs/mio/blob/master/src/sys/unix/net.rs
-    udp_sock.set_cloexec(true).unwrap();
-    udp_sock.set_nonblocking(true).unwrap();
-    udp_sock.bind(&socket2::SockAddr::from(local_addr)).unwrap();
+    udp_sock.set_cloexec(true)?;
+    udp_sock.set_nonblocking(true)?;
+    udp_sock.bind(&socket2::SockAddr::from(local_addr))?;
     let udp_sock: std::net::UdpSocket = udp_sock.into();
-    udp_sock.try_into().unwrap()
+    udp_sock.try_into()
 }
 
 pub fn assign_ipv6_address(device_name: &str, local: Ipv6Addr, peer: Ipv6Addr) {

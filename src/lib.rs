@@ -1,10 +1,12 @@
-use fake_tcp::packet::MAX_PACKET_LEN;
 use std::convert::From;
 use std::time::Duration;
+use tcp::packet::MAX_PACKET_LEN;
 
+pub mod tcp;
 pub mod utils;
 
-pub const UDP_TTL: Duration = Duration::from_secs(60);
+pub const UDP_SOCK_READ_DEADLINE: Duration = Duration::from_secs(20);
+pub const SOCK_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(3);
 
 #[derive(Debug)]
 pub enum Encryption {
