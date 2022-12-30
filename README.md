@@ -46,10 +46,10 @@ cargo install tonel --bin tonels --features='default,alloc-mi'
 ```
 
 Now, start Tonel to listen on UDP port 1111 and forward udp packet over TCP to `127.0.0.1:2222`
-Tonel server destination.
+Tonel server destination. We assume your network interface is `eth0`.
 
 ```bash
-RUST_LOG=info tonelc --local 127.0.0.1:1111 --remote 127.0.0.1:2222 --auto-rule
+RUST_LOG=info tonelc --local 127.0.0.1:1111 --remote 127.0.0.1:2222 --auto-rule eth0
 ```
 
 ## Server
@@ -63,10 +63,10 @@ cargo install tonel --bin tonelc --features='default,alloc-mi'
 ```
 
 Now, start Tonel to listen on TCP port 2222 and forward udp packet to `127.0.0.1:3333`
-remote destination.
+remote destination. We assume your network interface is `eth0`.
 
 ```bash
-RUST_LOG=info tonels --local 2222 --remote 127.0.0.1:3333 --auto-rule
+RUST_LOG=info tonels --local 2222 --remote 127.0.0.1:3333 --auto-rule eth0
 ```
 
 # MTU overhead
