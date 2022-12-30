@@ -106,7 +106,7 @@ It is a good practice to reduce the MTU further to avoid packet loss, and to app
 
 Currently, Tonel only works on Linux operating systems. There are plans to make it cross-platform in the future. Contributions are welcome.
 
-# Comparison to udp2raw
+# Comparing Tonel to udp2raw
 
 |                                                 |     Tonel     |      udp2raw      |
 | ----------------------------------------------- | :-----------: | :---------------: |

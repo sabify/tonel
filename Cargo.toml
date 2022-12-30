@@ -5,6 +5,8 @@ edition = "2021"
 authors = ["Saber Haj Rabiee"]
 license = "MIT"
 repository = "https://github.com/sabify/tonel"
+keywords = ["tcp", "udp", "network", "tun", "tunnel"]
+categories = ["network-programming"]
 readme = "README.md"
 description = """
 A Multi-Stream UDP over TCP Tunneler for Lightning-Fast Network Layer 3 Transmission with TUN Interface.
@@ -31,7 +33,7 @@ tokio-tun = "0.7"
 kanal = { git = "https://github.com/fereidani/kanal" }
 fxhash = "0.2.1"
 dashmap = "5.4.0"
-zeroize = "*"
+zeroize = "1.5.7"
 tokio-util = "0.7"
 pretty_env_logger = "0.4"
 num_cpus = "1.13"
