@@ -122,20 +122,17 @@ Currently, Tonel only works on Linux operating systems. There are plans to make 
 
 # Comparing Tonel to udp2raw
 
-|                                                 |     Tonel     |      udp2raw      |
-| ----------------------------------------------- | :-----------: | :---------------: |
-| UDP over Fake TCP                               |      ✅       |        ✅         |
-| UDP over ICMP                                   |      ❌       |        ✅         |
-| UDP over UDP                                    |      ❌       |        ✅         |
-| Arbitrary TCP handshake content                 |      ✅       |        ❌         |
-| Multi-threaded and concurrency                  |      ✅       |        ❌         |
-| Throughput                                      |   Excellent   |       Good        |
-| Layer 3 mode                                    | TUN interface | Raw sockets + BPF |
-| Tunneling MTU overhead                          |   12 bytes    |     44 bytes      |
-| Seprate TCP connections for each UDP connection | Client/Server |    Server only    |
-| Anti-replay                                     |      ❌       |        ✅         |
-| Encryption                                      |      ✅       |        ✅         |
-| IPv6                                            |      ✅       |        ✅         |
+|                                          |     Tonel     |      udp2raw      |
+| ---------------------------------------- | :-----------: | :---------------: |
+| UDP over Fake TCP                        |      ✅       |        ✅         |
+| Multi-Stream TCP and UDP per each client |      ✅       |        ❌         |
+| Arbitrary TCP handshake content          |      ✅       |        ❌         |
+| Multi-threaded and concurrency           |      ✅       |        ❌         |
+| Throughput                               |   Excellent   |       Good        |
+| Layer 3 mode                             | TUN interface | Raw sockets + BPF |
+| Tunneling MTU overhead                   |   12 bytes    |     44 bytes      |
+| Encryption                               |      ✅       |        ✅         |
+| IPv6                                     |      ✅       |        ✅         |
 
 # Client Command Line Options
 
@@ -197,7 +194,7 @@ Options:
       --encryption <encryption>        Specify an encryption algorithm for using in TCP connections.
                                        Server and client should use the same encryption.
                                        Currently XOR is only supported and the format should be 'xor:key'.
-      --udp-connections <number>       Number of UDP connections per each TCP connections. [default: 1]
+      --udp-connections <number>       Number of UDP connections per each TCP connection. [default: 1]
       --auto-rule <interface-name>     Automatically adds required iptables and sysctl rules.
                                        The argument needs the name of an active network interface
                                        that the firewall will route the traffic over it. (e.g. eth0)

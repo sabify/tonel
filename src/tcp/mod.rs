@@ -44,7 +44,7 @@ use pnet::packet::{tcp, Packet};
 use std::collections::HashMap;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::atomic::{AtomicU16, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::time;
 use tokio_tun::Tun;
@@ -74,16 +74,15 @@ struct Shared {
     listening: DashSet<u16, FxBuildHasher>,
     tuns: Vec<Arc<Tun>>,
     tun_index: AtomicUsize,
-    ready: kanal::AsyncSender<Socket>,
+    ready: kanal::AsyncSender<(Socket, u16)>,
     tuples_purge: Arc<Vec<kanal::AsyncSender<AddrTuple>>>,
 }
 
 pub struct Stack {
-    last_used_port: AtomicU16,
     shared: Arc<Shared>,
     local_ip: Ipv4Addr,
     local_ip6: Option<Ipv6Addr>,
-    ready: kanal::AsyncReceiver<Socket>,
+    ready: kanal::AsyncReceiver<(Socket, u16)>,
 }
 
 pub enum State {
@@ -117,7 +116,8 @@ impl Socket {
         tun: Arc<Tun>,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
-        ack: Option<u32>,
+        seq: u32,
+        ack: u32,
         state: State,
     ) -> (Socket, kanal::AsyncSender<([u8; MAX_PACKET_LEN], usize)>) {
         let (incoming_tx, incoming_rx) = kanal::bounded_async(MPMC_BUFFER_LEN);
@@ -129,8 +129,8 @@ impl Socket {
                 incoming: incoming_rx,
                 local_addr,
                 remote_addr,
-                seq: AtomicU32::new(0),
-                ack: AtomicU32::new(ack.unwrap_or(0)),
+                seq: AtomicU32::new(seq),
+                ack: AtomicU32::new(ack),
                 state,
             },
             incoming_tx,
@@ -225,7 +225,7 @@ impl Socket {
                                 }
                                 trace!("Waiting for tcp recv timed out: {err}, sending ACK");
                                 if self.send_keepalive(buf, 0).await.is_none() {
-                                    info!("Connection {} unable to send idling ACK back", self);
+                                    trace!("Connection {} unable to send idling ACK back", self);
                                     return None;
                                 }
                                 seq_sent = true;
@@ -255,7 +255,7 @@ impl Socket {
                             } else if tcp_packet.get_sequence() == 0 {
                                 trace!("Received ACK, sending ACK");
                                 if self.send_keepalive(buf, 1).await.is_none() {
-                                    info!("Connection {} unable to send idling ACK back", self);
+                                    trace!("Connection {} unable to send idling ACK back", self);
                                     return None;
                                 }
                                 continue;
@@ -279,7 +279,7 @@ impl Socket {
         None
     }
 
-    async fn accept(mut self, buf: &mut [u8]) {
+    async fn accept(mut self, buf: &mut [u8], seq: u32) {
         loop {
             match self.state {
                 State::Idle => {
@@ -287,11 +287,11 @@ impl Socket {
                         self.build_tcp_packet(buf, tcp::TcpFlags::SYN | tcp::TcpFlags::ACK, None);
                     // ACK set by constructor
                     if let Err(err) = self.tun.send(&buf[..size]).await {
-                        error!("Sent SYN + ACK error: {err}");
+                        trace!("Sent SYN + ACK error: {err}");
                         break;
                     }
                     self.state = State::SynReceived;
-                    info!("Sent SYN + ACK to client");
+                    trace!("Sent SYN + ACK to client");
                 }
                 State::SynReceived => {
                     let res = time::timeout(TIMEOUT, self.incoming.recv()).await;
@@ -304,12 +304,12 @@ impl Socket {
                             }
                         },
                         Err(err) => {
-                            info!("Waiting for client ACK timed out: {err}");
+                            trace!("Waiting for client ACK timed out: {err}");
                             break;
                         }
                     };
 
-                    let (_v4_packet, tcp_packet) = match parse_ip_packet(&buf.0[..buf.1]) {
+                    let (_ip_packet, tcp_packet) = match parse_ip_packet(&buf.0[..buf.1]) {
                         Some(packet) => packet,
                         None => break,
                     };
@@ -333,9 +333,9 @@ impl Socket {
                         // found our ACK
                         self.state = State::Established;
 
-                        info!("Connection from {:?} established", self.remote_addr);
+                        info!("Connection {} established", self);
                         let ready = self.shared.ready.clone();
-                        if let Err(e) = ready.send(self).await {
+                        if let Err(e) = ready.send((self, seq.try_into().unwrap_or(0))).await {
                             error!("Unable to send accepted socket to ready queue: {}", e);
                         }
                     }
@@ -347,17 +347,17 @@ impl Socket {
         self.state = State::Idle;
     }
 
-    async fn connect(&mut self, buf: &mut [u8]) -> Option<()> {
+    async fn connect(&mut self, buf: &mut [u8]) -> Option<u16> {
         loop {
             match self.state {
                 State::Idle => {
                     let size = self.build_tcp_packet(buf, tcp::TcpFlags::SYN, None);
                     if let Err(err) = self.tun.send(&buf[..size]).await {
-                        error!("Send SYN error: {err}");
+                        trace!("Send SYN error: {err}");
                         return None;
                     }
                     self.state = State::SynSent;
-                    info!("Sent SYN to server");
+                    trace!("Sent SYN to server");
                 }
                 State::SynSent => {
                     let res = time::timeout(TIMEOUT, self.incoming.recv()).await;
@@ -365,16 +365,16 @@ impl Socket {
                         Ok(packet_buf) => match packet_buf {
                             Ok(packet_buf) => packet_buf,
                             Err(err) => {
-                                error!("incoming channel error: {err}");
+                                trace!("incoming channel error: {err}");
                                 break;
                             }
                         },
                         Err(err) => {
-                            info!("Waiting for SYN + ACK timed out: {err}");
+                            trace!("Waiting for SYN + ACK timed out: {err}");
                             break;
                         }
                     };
-                    let (_v4_packet, tcp_packet) =
+                    let (_ip_packet, tcp_packet) =
                         match parse_ip_packet(&packet_buf.0[..packet_buf.1]) {
                             Some(packet) => packet,
                             None => break,
@@ -403,14 +403,15 @@ impl Socket {
                         // send ACK to finish handshake
                         let size = self.build_tcp_packet(buf, tcp::TcpFlags::ACK, None);
                         if let Err(err) = self.tun.send(&buf[..size]).await {
-                            error!("Send ACK error: {err}");
+                            trace!("Send ACK error: {err}");
                             break;
                         }
 
                         self.state = State::Established;
 
-                        info!("Connection to {:?} established", self.remote_addr);
-                        return Some(());
+                        info!("Connection {} established", self);
+
+                        return Some(tcp_packet.get_sequence().try_into().unwrap_or(0));
                     }
 
                     break;
@@ -452,7 +453,7 @@ impl Drop for Socket {
             warn!("Unable to send RST to remote end: {}", e);
         }
 
-        info!("TCP connection to {} closed", self);
+        info!("TCP connection {} closed", self);
     }
 }
 
@@ -500,7 +501,6 @@ impl Stack {
         }
 
         Stack {
-            last_used_port: AtomicU16::new(0),
             shared,
             local_ip,
             local_ip6,
@@ -514,15 +514,20 @@ impl Stack {
     }
 
     /// Accepts an incoming connection.
-    pub async fn accept(&mut self) -> Socket {
+    pub async fn accept(&mut self) -> (Socket, u16) {
         self.ready.recv().await.unwrap()
     }
 
     /// Connects to the remote end. `None` returned means
     /// the connection attempt failed.
-    pub async fn connect(&self, buf: &mut [u8], addr: SocketAddr) -> Option<Socket> {
+    pub async fn connect(
+        &self,
+        buf: &mut [u8],
+        addr: SocketAddr,
+        seq: u32,
+    ) -> Option<(Socket, u16)> {
         for _ in 1024..u16::MAX {
-            let mut local_port = self.last_used_port.fetch_add(1, Ordering::AcqRel);
+            let mut local_port = fastrand::u16(1024..);
             if local_port < u16::MAX - 1024 {
                 local_port += 1024;
             }
@@ -547,14 +552,15 @@ impl Stack {
                         tun,
                         local_addr,
                         addr,
-                        None,
+                        seq,
+                        0,
                         State::Idle,
                     );
                     v.insert(incoming);
                     sock
                 }
             };
-            return sock.connect(buf).await.map(|_| sock);
+            return sock.connect(buf).await.map(|port| (sock, port));
         }
         None
     }
@@ -624,38 +630,21 @@ impl Stack {
                         && shared.listening.contains(&tcp_packet.get_destination())
                     {
                         // SYN seen on listening socket
-                        if tcp_packet.get_sequence() == 0 {
-                            let (sock, incoming) = Socket::new(
-                                shared.clone(),
-                                tun.clone(),
-                                local_addr,
-                                remote_addr,
-                                Some(tcp_packet.get_sequence() + 1),
-                                State::Idle,
-                            );
-                            assert!(shared.tuples.insert(tuple, incoming).is_none());
-                            tokio::spawn(async move {
-                                let mut buf = [0u8; MAX_PACKET_LEN];
-                                sock.accept(&mut buf).await
-                            });
-                        } else {
-                            trace!("Bad TCP SYN packet from {}, sending RST", remote_addr);
-                            let size = build_tcp_packet(
-                                &mut send_buf,
-                                local_addr,
-                                remote_addr,
-                                0,
-                                tcp_packet.get_sequence() + tcp_packet.payload().len() as u32 + 1, // +1 because of SYN flag set
-                                tcp::TcpFlags::RST | tcp::TcpFlags::ACK,
-                                None,
-                            );
-                            let tun_index =
-                                shared.tun_index.fetch_add(1, Ordering::Relaxed) % shared.tuns.len();
-                            let tun = shared.tuns[tun_index].clone();
-                            if let Err(err) = tun.try_send(&send_buf[..size]) {
-                                error!("tun send error: {err}");
-                            }
-                        }
+                        let (sock, incoming) = Socket::new(
+                            shared.clone(),
+                            tun.clone(),
+                            local_addr,
+                            remote_addr,
+                            remote_addr.port() as u32,
+                            tcp_packet.get_sequence() + 1,
+                            State::Idle,
+                        );
+                        assert!(shared.tuples.insert(tuple, incoming).is_none());
+                        let seq = tcp_packet.get_sequence();
+                        tokio::spawn(async move {
+                            let mut buf = [0u8; MAX_PACKET_LEN];
+                            sock.accept(&mut buf, seq).await
+                        });
                     } else if (tcp_packet.get_flags() & tcp::TcpFlags::RST) == 0 {
                         trace!("Unknown TCP packet from {}, sending RST", remote_addr);
                         let size = build_tcp_packet(

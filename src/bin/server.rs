@@ -1,21 +1,23 @@
 use cfg_if::cfg_if;
 use clap::{crate_version, Arg, ArgAction, Command};
+use fxhash::FxBuildHasher;
 use log::{debug, error, info};
+use std::collections::HashMap;
 use std::fs;
 use std::io;
+use std::net::IpAddr;
 use std::net::Ipv4Addr;
+use std::net::Ipv6Addr;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::broadcast;
-use tokio::time;
 use tokio_tun::TunBuilder;
 use tokio_util::sync::CancellationToken;
 use tonel::tcp::packet::MAX_PACKET_LEN;
 use tonel::tcp::Stack;
 use tonel::utils::{assign_ipv6_address, new_udp_reuseport};
 use tonel::Encryption;
-
-use tonel::UDP_SOCK_READ_DEADLINE;
 
 cfg_if! {
     if #[cfg(all(feature = "alloc-jem", not(target_env = "msvc")))] {
@@ -31,7 +33,7 @@ cfg_if! {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    pretty_env_logger::init();
+    pretty_env_logger::init_timed();
 
     let num_cpus = num_cpus::get();
     info!("{} cores available", num_cpus);
@@ -455,13 +457,30 @@ async fn main() -> io::Result<()> {
 
     info!("Created TUN device {}", tun[0].name());
 
-    //thread::sleep(time::Duration::from_secs(5));
     let mut stack = Stack::new(tun, tun_local, tun_local6);
     stack.listen(local_port);
     info!("Listening on {}", local_port);
 
+    struct TcpPeer {
+        udp_peers: Arc<Vec<Arc<UdpSocket>>>,
+    }
+    let mut addresses: HashMap<SocketAddr, TcpPeer, FxBuildHasher> = HashMap::default();
+    let (addresses_tx, addresses_rx) = kanal::unbounded_async::<SocketAddr>();
+
     'main_loop: loop {
-        let tcp_sock = Arc::new(stack.accept().await);
+        let (tcp_sock, first_port) = tokio::select! {
+            biased;
+            addr = addresses_rx.recv() => {
+                let addr = addr.unwrap();
+                addresses.remove(&addr);
+                continue;
+            },
+            res = stack.accept() => {
+                res
+            },
+        };
+
+        let tcp_sock = Arc::new(tcp_sock);
         info!("New connection: {}", tcp_sock);
 
         let mut buf_tcp = [0u8; MAX_PACKET_LEN];
@@ -472,46 +491,71 @@ async fn main() -> io::Result<()> {
             should_receive_handshake_packet = true;
         }
 
-        let udp_sock = UdpSocket::bind(if remote_addr.is_ipv4() {
-            "0.0.0.0:0"
-        } else {
-            "[::]:0"
-        })
-        .await;
+        let mut removable_address: Option<SocketAddr> = None;
 
-        let udp_sock = match udp_sock {
-            Ok(udp_sock) => udp_sock,
-            Err(err) => {
-                error!("No more UDP address is available: {err}");
+        let udp_socks = if first_port == 0 {
+            let udp_sock = UdpSocket::bind(if remote_addr.is_ipv4() {
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0)
+            } else {
+                SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)), 0)
+            })
+            .await;
+
+            let udp_sock = match udp_sock {
+                Ok(udp_sock) => udp_sock,
+                Err(err) => {
+                    error!("No more UDP address is available: {err}");
+                    continue;
+                }
+            };
+
+            let local_addr = udp_sock.local_addr().unwrap();
+            drop(udp_sock);
+
+            let udp_socks: Vec<_> = {
+                let mut socks = Vec::with_capacity(udp_socks_amount);
+                for _ in 0..udp_socks_amount {
+                    let udp_sock = match new_udp_reuseport(local_addr) {
+                        Ok(udp_sock) => udp_sock,
+                        Err(err) => {
+                            error!("Craeting new udp socket error: {err}");
+                            continue 'main_loop;
+                        }
+                    };
+                    if let Err(err) = udp_sock.connect(remote_addr).await {
+                        error!("UDP couldn't connect to {remote_addr}: {err}, closing connection");
+                        continue 'main_loop;
+                    }
+                    socks.push(Arc::new(udp_sock));
+                }
+                socks
+            };
+
+            let udp_socks = Arc::new(udp_socks);
+
+            removable_address = Some(tcp_sock.remote_addr());
+
+            let tcp_peer = TcpPeer {
+                udp_peers: udp_socks.clone(),
+            };
+
+            addresses.insert(tcp_sock.remote_addr(), tcp_peer);
+
+            udp_socks
+        } else {
+            let address = SocketAddr::new(tcp_sock.remote_addr().ip(), first_port);
+            if let Some(tcp_peer) = addresses.get(&address) {
+                tcp_peer.udp_peers.clone()
+            } else {
+                error!("The request port {first_port} does not exists.");
                 continue;
             }
         };
 
-        let local_addr = udp_sock.local_addr().unwrap();
-        drop(udp_sock);
-
         let cancellation = CancellationToken::new();
         let (packet_received_tx, _packet_received_rx) = broadcast::channel(1);
-        let udp_socks: Vec<_> = {
-            let mut socks = Vec::with_capacity(udp_socks_amount);
-            for _ in 0..udp_socks_amount {
-                let udp_sock = match new_udp_reuseport(local_addr) {
-                    Ok(udp_sock) => udp_sock,
-                    Err(err) => {
-                        error!("Craeting new udp socket error: {err}");
-                        continue 'main_loop;
-                    }
-                };
-                if let Err(err) = udp_sock.connect(remote_addr).await {
-                    error!("UDP couldn't connect to {remote_addr}: {err}, closing connection");
-                    continue 'main_loop;
-                }
-                socks.push(Arc::new(udp_sock));
-            }
-            socks
-        };
 
-        for udp_sock in &udp_socks {
+        for udp_sock in udp_socks.as_ref() {
             let tcp_sock = tcp_sock.clone();
             let cancellation = cancellation.clone();
             let encryption = encryption.clone();
@@ -522,11 +566,10 @@ async fn main() -> io::Result<()> {
                 let mut buf_udp = [0u8; MAX_PACKET_LEN];
                 let mut buf = [0u8; MAX_PACKET_LEN];
                 loop {
-                    let read_timeout = time::sleep(UDP_SOCK_READ_DEADLINE);
                     tokio::select! {
                         biased;
                         _ = cancellation.cancelled() => {
-                            debug!("Closing connection requested for {local_addr}, closing connection");
+                            debug!("Closing connection requested for {}, closing connection", udp_sock.local_addr().unwrap());
                             break;
                         },
                         res = udp_sock.recv(&mut buf_udp) => {
@@ -541,7 +584,7 @@ async fn main() -> io::Result<()> {
                                     }
                                 },
                                 Err(err) => {
-                                    debug!("UDP connection closed on {remote_addr}: {err}, closing connection");
+                                    debug!("UDP connection error on {}: {err}", udp_sock.local_addr().unwrap());
                                     break;
                                 }
                             };
@@ -549,19 +592,20 @@ async fn main() -> io::Result<()> {
                         _ = packet_received_rx.recv() => {
                             continue;
                         },
-                        _ = read_timeout => {
-                            debug!("No traffic seen in the last {:?}, closing connection {local_addr}", UDP_SOCK_READ_DEADLINE);
-                            break;
-                        },
                     };
                     _ = packet_received_tx.send(());
                 }
+                debug!(
+                    "UDP connection closed on {}",
+                    udp_sock.local_addr().unwrap()
+                );
                 cancellation.cancel();
             });
         }
         let tcp_sock = tcp_sock.clone();
         let encryption = encryption.clone();
         let cancellation = cancellation.clone();
+        let addresses_tx = addresses_tx.clone();
         tokio::spawn(async move {
             let mut udp_sock_index = 0;
             let mut buf = [0u8; MAX_PACKET_LEN];
@@ -570,7 +614,7 @@ async fn main() -> io::Result<()> {
                 tokio::select! {
                     biased;
                     _ = cancellation.cancelled() => {
-                        debug!("Closing connection requested for {local_addr}, closing connection");
+                        debug!("Closing connection requested for {tcp_sock}, closing connection");
                         break;
                     },
                     res = tcp_sock.recv(&mut buf_tcp) => {
@@ -587,18 +631,16 @@ async fn main() -> io::Result<()> {
                                     }
                                     continue;
                                 }
-                                udp_sock_index = (udp_sock_index + 1) % udp_socks_amount;
-                                let udp_sock = udp_socks[udp_sock_index].clone();
                                 if let Some(ref enc) = *encryption {
                                     enc.decrypt(&mut buf_tcp[..size]);
                                 }
-                                if let Err(e) = udp_sock.send(&buf_tcp[..size]).await {
-                                    debug!("Unable to send UDP packet to {local_addr}: {e}, closing connection");
+                                udp_sock_index = (udp_sock_index + 1) % udp_socks.len();
+                                if let Err(e) = udp_socks[udp_sock_index].send(&buf_tcp[..size]).await {
+                                    debug!("Unable to send UDP packet to {remote_addr}: {e}, closing connection");
                                     break;
                                 }
                             },
                             None => {
-                                debug!("TCP connection closed on {local_addr}");
                                 break;
                             },
                         };
@@ -606,8 +648,10 @@ async fn main() -> io::Result<()> {
                 };
                 _ = packet_received_tx.send(());
             }
+            if let Some(removable_address) = removable_address {
+                addresses_tx.send(removable_address).await.unwrap();
+            }
             cancellation.cancel();
-            info!("Connention {local_addr} closed");
         });
     }
 }

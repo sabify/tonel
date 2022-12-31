@@ -4,7 +4,6 @@ use log::{debug, error, info, trace};
 use std::fs;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::broadcast;
@@ -33,7 +32,7 @@ cfg_if! {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    pretty_env_logger::init();
+    pretty_env_logger::init_timed();
 
     let num_cpus = num_cpus::get();
     info!("{} cores available", num_cpus);
@@ -490,6 +489,7 @@ async fn main() -> io::Result<()> {
                     error!("Unable to connect to {addr} over udp: {err}");
                     continue 'main_loop;
                 }
+
                 socks.push(Arc::new(udp_sock));
             }
             Arc::new(socks)
@@ -497,31 +497,51 @@ async fn main() -> io::Result<()> {
 
         let cancellation = CancellationToken::new();
         let (packet_received_tx, _) = broadcast::channel(1);
-        let udp_sock_index = Arc::new(AtomicUsize::new(0));
-        let tcp_sock_index = Arc::new(AtomicUsize::new(0));
 
         let first_packet = Some(buf_r[..size].into());
         let mut tcp_connect = TcpConnect {
             udp_socks: udp_socks.clone(),
             encryption: encryption.clone(),
             packet_received_tx: packet_received_tx.clone(),
-            udp_sock_index,
             handshake_packet: handshake_packet.clone(),
             cancellation: cancellation.clone(),
-            addr,
             first_packet,
         };
 
         let tcp_socks: Arc<Vec<_>> = {
             let mut socks = Vec::with_capacity(tcp_socks_amount);
             let mut set = JoinSet::new();
+            let mut first_connection = true;
+            let mut first_port = 0u16;
             for i in 0..tcp_socks_amount {
                 debug!("Creating tcp stream {i} to {remote_addr} for {addr}.");
                 let stack = stack.clone();
                 let tcp_connect_clone = tcp_connect.clone();
+                if first_connection {
+                    let mut buf = [0u8; MAX_PACKET_LEN];
+                    let res = stack.connect(&mut buf, remote_addr, 0).await;
+                    let tcp_sock = if let Some((tcp_sock, port)) = res {
+                        first_port = port;
+                        Arc::new(tcp_sock)
+                    } else {
+                        error!("Unable to connect a tcp sock to remote {remote_addr} for {addr}");
+                        continue 'main_loop;
+                    };
+                    {
+                        let tcp_sock = tcp_sock.clone();
+                        tokio::spawn(async move {
+                            tcp_connect_clone.handle(&mut buf, tcp_sock).await;
+                        });
+                    }
+                    socks.push(tcp_sock);
+                    first_connection = false;
+                    continue;
+                }
                 set.spawn(async move {
                     let mut buf = [0u8; MAX_PACKET_LEN];
-                    let tcp_sock = stack.connect(&mut buf, remote_addr).await?;
+                    let (tcp_sock, _) = stack
+                        .connect(&mut buf, remote_addr, first_port as u32)
+                        .await?;
                     let tcp_sock = Arc::new(tcp_sock);
                     {
                         let tcp_sock = tcp_sock.clone();
@@ -563,12 +583,12 @@ async fn main() -> io::Result<()> {
             let mut packet_received_rx = packet_received_tx.subscribe();
             let packet_received_tx = packet_received_tx.clone();
             let cancellation = cancellation.clone();
-            let tcp_sock_index = tcp_sock_index.clone();
             let encryption = encryption.clone();
             let tcp_socks = tcp_socks.clone();
             tokio::spawn(async move {
                 let mut buf_udp = [0u8; MAX_PACKET_LEN];
                 let mut buf = [0u8; MAX_PACKET_LEN];
+                let mut tcp_sock_index = 0usize;
                 loop {
                     let read_timeout = time::sleep(UDP_SOCK_READ_DEADLINE);
                     tokio::select! {
@@ -583,10 +603,8 @@ async fn main() -> io::Result<()> {
                                     if let Some(ref enc) = *encryption {
                                         enc.encrypt(&mut buf_udp[..size]);
                                     }
-                                    let tcp_sock_index = tcp_sock_index.fetch_add(1, Ordering::Relaxed) % tcp_socks.len();
-                                    let tcp_sock = tcp_socks[tcp_sock_index].clone();
-
-                                    if tcp_sock.send(&mut buf, &buf_udp[..size]).await.is_none() {
+                                    tcp_sock_index = (tcp_sock_index + 1) % tcp_socks.len();
+                                    if tcp_socks[tcp_sock_index].send(&mut buf, &buf_udp[..size]).await.is_none() {
                                         debug!("Unable to send TCP traffic on {:?}, closing connection", udp_sock);
                                         break;
                                     }
@@ -619,10 +637,8 @@ struct TcpConnect {
     udp_socks: Arc<Vec<Arc<UdpSocket>>>,
     encryption: Arc<Option<Encryption>>,
     packet_received_tx: broadcast::Sender<()>,
-    udp_sock_index: Arc<AtomicUsize>,
     handshake_packet: Arc<Option<Vec<u8>>>,
     cancellation: CancellationToken,
-    addr: SocketAddr,
     first_packet: Option<Vec<u8>>,
 }
 
@@ -639,6 +655,7 @@ impl TcpConnect {
             debug!("Sent handshake packet to: {tcp_sock}");
         }
 
+        let mut udp_sock_index = 0usize;
         loop {
             tokio::select! {
                 biased;
@@ -662,18 +679,16 @@ impl TcpConnect {
                                 }
                                 continue;
                             }
-                            let udp_sock_index = self.udp_sock_index.fetch_add(1, Ordering::Relaxed) % self.udp_socks.len();
-                            let udp_sock = self.udp_socks[udp_sock_index].clone();
                             if let Some(ref enc) = *self.encryption {
                                 enc.decrypt(&mut buf[..size]);
                             }
-                            if let Err(e) = udp_sock.send(&buf[..size]).await {
+                            udp_sock_index = (udp_sock_index + 1) % self.udp_socks.len();
+                            if let Err(e) = self.udp_socks[udp_sock_index].send(&buf[..size]).await {
                                 debug!("Unable to send UDP packet on {tcp_sock}: {e}, closing connection");
                                 break;
                             }
                         },
                         None => {
-                            debug!("TCP connection closed on {tcp_sock}, closing connection");
                             break;
                         },
                     }
@@ -681,8 +696,6 @@ impl TcpConnect {
             };
             _ = self.packet_received_tx.send(());
         }
-
         self.cancellation.cancel();
-        debug!("deleted {} TCP socket", self.addr);
     }
 }

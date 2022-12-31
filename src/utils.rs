@@ -23,6 +23,7 @@ pub fn new_udp_reuseport(local_addr: SocketAddr) -> std::io::Result<UdpSocket> {
         None,
     )?;
     udp_sock.set_reuse_port(true)?;
+    udp_sock.set_reuse_address(true)?;
     // from tokio-rs/mio/blob/master/src/sys/unix/net.rs
     udp_sock.set_cloexec(true)?;
     udp_sock.set_nonblocking(true)?;
