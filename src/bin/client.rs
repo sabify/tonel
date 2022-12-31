@@ -47,7 +47,8 @@ async fn main() -> io::Result<()> {
                 .long("local")
                 .required(true)
                 .value_name("IP:PORT")
-                .help("Sets the IP and port where Tonel Client listens for incoming UDP datagrams, IPv6 address need to be specified as: \"[IPv6]:PORT\"")
+                .help("Sets the IP and port where Tonel Client listens for incoming UDP datagrams, \n\
+                    IPv6 address need to be specified as: \"[IPv6]:PORT\"")
         )
         .arg(
             Arg::new("remote")
@@ -55,7 +56,8 @@ async fn main() -> io::Result<()> {
                 .long("remote")
                 .required(true)
                 .value_name("IP or HOST NAME:PORT")
-                .help("Sets the address or host name and port where Tonel Client connects to Tonel Server, IPv6 address need to be specified as: \"[IPv6]:PORT\"")
+                .help("Sets the address or host name and port where Tonel Client connects to Tonel Server, \n\
+                    IPv6 address need to be specified as: \"[IPv6]:PORT\"")
         )
         .arg(
             Arg::new("tun")
@@ -78,8 +80,8 @@ async fn main() -> io::Result<()> {
                 .long("tun-peer")
                 .required(false)
                 .value_name("IP")
-                .help("Sets the Tun interface IPv4 destination (peer) address (Tonel Client's end). \
-                       You will need to setup SNAT/MASQUERADE rules on your Internet facing interface \
+                .help("Sets the Tun interface IPv4 destination (peer) address (Tonel Client's end). \n\
+                       You will need to setup SNAT/MASQUERADE rules on your Internet facing interface \n\
                        in order for Tonel Client to connect to Tonel Server")
                 .default_value("192.168.200.2")
         )
@@ -105,8 +107,8 @@ async fn main() -> io::Result<()> {
                 .long("tun-peer6")
                 .required(false)
                 .value_name("IP")
-                .help("Sets the Tun interface IPv6 destination (peer) address (Tonel Client's end). \
-                       You will need to setup SNAT/MASQUERADE rules on your Internet facing interface \
+                .help("Sets the Tun interface IPv6 destination (peer) address (Tonel Client's end). \n\
+                       You will need to setup SNAT/MASQUERADE rules on your Internet facing interface \n\
                        in order for Tonel Client to connect to Tonel Server")
                 .default_value("fcc8::2")
         )
@@ -115,9 +117,9 @@ async fn main() -> io::Result<()> {
                 .long("handshake-packet")
                 .required(false)
                 .value_name("PATH")
-                .help("Specify a file, which, after TCP handshake, its content will be sent as the \
+                .help("Specify a file, which, after TCP handshake, its content will be sent as the \n\
                       first data packet to the server.\n\
-                      Note: ensure this file's size does not exceed the MTU of the outgoing interface. \
+                      Note: ensure this file's size does not exceed the MTU of the outgoing interface. \n\
                       The content is always sent out in a single packet and will not be further segmented")
         )
         .arg(

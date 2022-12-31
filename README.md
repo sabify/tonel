@@ -88,11 +88,10 @@ RUST_LOG=info tonels --local 2222 --remote 127.0.0.1:3333 --auto-rule eth0
 
 Tonel's goal is to minimize tunneling overhead. As an example, the overhead compared to a standard UDP packet using IPv4 is as follows:
 
-**Standard UDP packet:** `20 byte IP header + 8 byte UDP header = 28 bytes`
-
+**Standard UDP packet:** `20 byte IP header + 8 byte UDP header = 28 bytes`\
 **Tonel TCP packet:** `20 byte IP header + 20 byte TCP header = 40 bytes`
 
-**UDP apps on both sides of Tonel must tune their MTU and reduce it by at least 12 bytes on IPv4 or 32 bytes on IPv6.**
+**Note:** UDP apps on both sides of Tonel must tune their MTU and reduce it by at least 12 bytes on IPv4 or 32 bytes on IPv6.
 
 ## MTU calculation for WireGuard
 
@@ -110,7 +109,7 @@ WireGuard MTU = Interface MTU - IPv6 header (40 bytes) - TCP header (20 bytes) -
 
 For instance, if you are using an Ethernet interface with an MTU of 1500 bytes, the WireGuard interface MTU should be set as follows:
 
-IPv4: `1500 - 20 - 20 - 32 = 1428 bytes`<br>
+IPv4: `1500 - 20 - 20 - 32 = 1428 bytes`\
 IPv6: `1500 - 40 - 20 - 32 = 1408 bytes`
 
 The resulting Tonel TCP data packet will have a size of 1500 bytes, which does not exceed the interface MTU of 1500.

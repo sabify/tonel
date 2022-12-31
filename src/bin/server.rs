@@ -53,7 +53,8 @@ async fn main() -> io::Result<()> {
                 .long("remote")
                 .required(true)
                 .value_name("IP or HOST NAME:PORT")
-                .help("Sets the address or host name and port where Tonel Server forwards UDP packets to, IPv6 address need to be specified as: \"[IPv6]:PORT\"")
+                .help("Sets the address or host name and port where Tonel Server forwards UDP packets to, \n\
+                    IPv6 address need to be specified as: \"[IPv6]:PORT\"")
         )
         .arg(
             Arg::new("tun")
@@ -76,8 +77,8 @@ async fn main() -> io::Result<()> {
                 .long("tun-peer")
                 .required(false)
                 .value_name("IP")
-                .help("Sets the Tun interface destination (peer) address (Tonel Server's end). \
-                       You will need to setup DNAT rules to this address in order for Tonel Server \
+                .help("Sets the Tun interface destination (peer) address (Tonel Server's end). \n\
+                       You will need to setup DNAT rules to this address in order for Tonel Server \n\
                        to accept TCP traffic from Tonel Client")
                 .default_value("192.168.201.2")
         )
@@ -103,8 +104,8 @@ async fn main() -> io::Result<()> {
                 .long("tun-peer6")
                 .required(false)
                 .value_name("IP")
-                .help("Sets the Tun interface IPv6 destination (peer) address (Tonel Client's end). \
-                       You will need to setup SNAT/MASQUERADE rules on your Internet facing interface \
+                .help("Sets the Tun interface IPv6 destination (peer) address (Tonel Client's end). \n\
+                       You will need to setup SNAT/MASQUERADE rules on your Internet facing interface \n\
                        in order for Tonel Client to connect to Tonel Server")
                 .default_value("fcc9::2")
         )
@@ -113,9 +114,9 @@ async fn main() -> io::Result<()> {
                 .long("handshake-packet")
                 .required(false)
                 .value_name("PATH")
-                .help("Specify a file, which, after TCP handshake, its content will be sent as the \
+                .help("Specify a file, which, after TCP handshake, its content will be sent as the \n\
                       first data packet to the client.\n\
-                      Note: ensure this file's size does not exceed the MTU of the outgoing interface. \
+                      Note: ensure this file's size does not exceed the MTU of the outgoing interface. \n\
                       The content is always sent out in a single packet and will not be further segmented")
         )
         .arg(
