@@ -64,7 +64,7 @@ Now, start Tonel to listen on UDP port 1111 and forward udp packet over TCP to `
 Tonel server destination. We assume your network interface is `eth0`.
 
 ```bash
-RUST_LOG=info tonelc --local 127.0.0.1:1111 --remote 127.0.0.1:2222 --auto-rule eth0
+tonelc --local 127.0.0.1:1111 --remote 127.0.0.1:2222 --auto-rule eth0
 ```
 
 ## Server
@@ -81,7 +81,7 @@ Now, start Tonel to listen on TCP port 2222 and forward udp packet to `127.0.0.1
 remote destination. We assume your network interface is `eth0`.
 
 ```bash
-RUST_LOG=info tonels --local 2222 --remote 127.0.0.1:3333 --auto-rule eth0
+tonels --local 2222 --remote 127.0.0.1:3333 --auto-rule eth0
 ```
 
 # MTU overhead
@@ -124,7 +124,6 @@ Currently, Tonel only works on Linux operating systems. There are plans to make 
 
 |                                          |     Tonel     |      udp2raw      |
 | ---------------------------------------- | :-----------: | :---------------: |
-| UDP over Fake TCP                        |      ✅       |        ✅         |
 | Multi-Stream TCP and UDP per each client |      ✅       |        ❌         |
 | Arbitrary TCP handshake content          |      ✅       |        ❌         |
 | Multi-threaded and concurrency           |      ✅       |        ❌         |
@@ -161,9 +160,13 @@ Options:
       --encryption <encryption>        Specify an encryption algorithm for using in TCP connections.
                                        Server and client should use the same encryption.
                                        Currently XOR is only supported and the format should be 'xor:key'.
-      --auto-rule <interface-name>     Automatically adds required iptables and sysctl rules.
+      --auto-rule <interface-name>     Automatically adds and removes required iptables and sysctl rules.
                                        The argument needs the name of an active network interface
                                        that the firewall will route the traffic over it. (e.g. eth0)
+      -d, --daemonize                  Start the process as a daemon.
+      --log-output                     Log output path. default is stdout.
+      --log-level                      Log output level. It could be one of the following:
+                                       off, error, warn, info, debug, trace.
   -h, --help                           Print help information
   -V, --version                        Print version information
 ```
@@ -195,9 +198,13 @@ Options:
                                        Server and client should use the same encryption.
                                        Currently XOR is only supported and the format should be 'xor:key'.
       --udp-connections <number>       Number of UDP connections per each TCP connection. [default: 1]
-      --auto-rule <interface-name>     Automatically adds required iptables and sysctl rules.
+      --auto-rule <interface-name>     Automatically adds and removes required iptables and sysctl rules.
                                        The argument needs the name of an active network interface
                                        that the firewall will route the traffic over it. (e.g. eth0)
+      -d, --daemonize                  Start the process as a daemon.
+      --log-output                     Log output path. default is stdout.
+      --log-level                      Log output level. It could be one of the following:
+                                       off, error, warn, info, debug, trace.
   -h, --help                           Print help information
   -V, --version                        Print version information
 ```

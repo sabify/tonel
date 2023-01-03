@@ -48,7 +48,8 @@ pub fn build_tcp_packet(
     let tcp_header_len = TCP_HEADER_LEN + if wscale { 4 } else { 0 }; // nop + wscale
     let tcp_total_len = tcp_header_len + payload.map_or(0, |payload| payload.len());
     let total_len = ip_header_len + tcp_total_len;
-    (&mut buf[..total_len]).zeroize();
+
+    buf[..total_len].zeroize();
 
     match (local_addr, remote_addr) {
         (SocketAddr::V4(local), SocketAddr::V4(remote)) => {
@@ -84,7 +85,7 @@ pub fn build_tcp_packet(
     tcp.set_sequence(seq);
     tcp.set_acknowledgement(ack);
     tcp.set_flags(flags);
-    tcp.set_data_offset(TCP_HEADER_LEN as u8 / 4 + if wscale { 1 } else { 0 });
+    tcp.set_data_offset(TCP_HEADER_LEN as u8 / 4 + wscale as u8);
     if wscale {
         let wscale = tcp::TcpOption::wscale(14);
         tcp.set_options(&[tcp::TcpOption::nop(), wscale]);

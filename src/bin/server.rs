@@ -33,8 +33,6 @@ cfg_if! {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    pretty_env_logger::init_timed();
-
     let num_cpus = num_cpus::get();
     info!("{} cores available", num_cpus);
 
@@ -143,11 +141,53 @@ async fn main() -> io::Result<()> {
                 .long("auto-rule")
                 .required(false)
                 .value_name("interface-name")
-                .help("Automatically adds required iptables and sysctl rules.\n\
+                .help("Automatically adds and removes required iptables and sysctl rules.\n\
                 The argument needs the name of an active network interface \n\
                 that the firewall will route the traffic over it. (e.g. eth0)")
         )
+        .arg(
+            Arg::new("daemonize")
+                .long("daemonize")
+                .short('d')
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .help("Start the process as a daemon.")
+        )
+        .arg(
+            Arg::new("log_output")
+                .long("log-output")
+                .required(false)
+                .help("Log output path. default is stdout.")
+        )
+        .arg(
+            Arg::new("log_level")
+                .long("log-level")
+                .required(false)
+                .default_value("info")
+                .help("Log output level. It could be one of the following:\n\
+                    off, error, warn, info, debug, trace.")
+        )
         .get_matches();
+
+    let mut log_builder = env_logger::Builder::from_env(
+        env_logger::Env::new().filter(matches.get_one::<String>("log_level").unwrap()),
+    );
+    match matches.get_one::<String>("log_output") {
+        Some(path) => {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .open(path)
+                .expect("log output path does not exist.");
+            log_builder.target(env_logger::Target::Pipe(Box::new(file)));
+        }
+        None => {
+            log_builder.target(env_logger::Target::Stdout);
+        }
+    }
+
+    log_builder.init();
 
     let local_port: u16 = matches
         .get_one::<String>("local")
@@ -225,6 +265,8 @@ async fn main() -> io::Result<()> {
     }
 
     let auto_rule = matches.get_one::<String>("auto_rule");
+
+    let exit_fn: Box<dyn Fn() + 'static + Send>;
 
     if let Some(dev_name) = auto_rule {
         let ipv4_forward_value = std::process::Command::new("sysctl")
@@ -351,7 +393,7 @@ async fn main() -> io::Result<()> {
             info!("ip6tables has been configured.");
         }
 
-        ctrlc::set_handler(move || {
+        exit_fn = Box::new(move || {
             let status = std::process::Command::new("sysctl")
                 .arg("-w")
                 .arg(&ipv4_forward_value)
@@ -424,8 +466,7 @@ async fn main() -> io::Result<()> {
             }
 
             std::process::exit(0);
-        })
-        .expect("Error setting Ctrl-C handler");
+        });
     } else {
         info!(
             "Make sure ip forwarding is enabled, run the following commands: \n\
@@ -453,6 +494,22 @@ async fn main() -> io::Result<()> {
                 tun_peer6.unwrap(),
             );
         }
+
+        exit_fn = Box::new(|| {});
+    }
+
+    let daemonize = matches.get_flag("daemonize");
+    if daemonize {
+        daemonize::Daemonize::new()
+            .working_directory("/tmp")
+            .exit_action(exit_fn)
+            .start()
+            .unwrap_or_else(|e| {
+                error!("failed to daemonize: {e}");
+                std::process::exit(1);
+            });
+    } else {
+        ctrlc::set_handler(exit_fn).expect("Error setting Ctrl-C handler");
     }
 
     info!("Created TUN device {}", tun[0].name());
