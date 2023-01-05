@@ -1,4 +1,5 @@
 use cfg_if::cfg_if;
+use clap::ArgMatches;
 use clap::{crate_version, Arg, ArgAction, Command};
 use fxhash::FxBuildHasher;
 use log::{debug, error, info};
@@ -31,11 +32,8 @@ cfg_if! {
     }
 }
 
-#[tokio::main]
-async fn main() -> io::Result<()> {
+fn main() {
     let num_cpus = num_cpus::get();
-    info!("{} cores available", num_cpus);
-
     let matches = Command::new("Tonel Server")
         .version(crate_version!())
         .author("Saber Haj Rabiee")
@@ -133,9 +131,18 @@ async fn main() -> io::Result<()> {
                 .long("udp-connections")
                 .required(false)
                 .value_name("number")
-                .help("Number of UDP connections per each TCP connections.")
+                .help("The number of UDP connections per each client.")
                 .default_value(num_cpus.to_string())
         )
+        .arg(
+            Arg::new("tun_queues")
+                .long("tun-queues")
+                .required(false)
+                .value_name("number")
+                .help("The number of queues for TUN interface. Default is \n\
+                       set to the number of CPU cores.")
+                .default_value(num_cpus.to_string())
+                )
         .arg(
             Arg::new("auto_rule")
                 .long("auto-rule")
@@ -157,7 +164,7 @@ async fn main() -> io::Result<()> {
             Arg::new("log_output")
                 .long("log-output")
                 .required(false)
-                .help("Log output path. default is stdout.")
+                .help("Log output path.")
         )
         .arg(
             Arg::new("log_level")
@@ -169,64 +176,65 @@ async fn main() -> io::Result<()> {
         )
         .get_matches();
 
-    let mut log_builder = env_logger::Builder::from_env(
-        env_logger::Env::new().filter(matches.get_one::<String>("log_level").unwrap()),
+    let mut log_builder = env_logger::Builder::new();
+    log_builder.filter(
+        None,
+        matches
+            .get_one::<String>("log_level")
+            .unwrap()
+            .parse()
+            .unwrap(),
     );
-    match matches.get_one::<String>("log_output") {
-        Some(path) => {
+
+    log_builder.init();
+
+    let daemonize = matches.get_flag("daemonize");
+    if daemonize {
+        let mut daemon = daemonize::Daemonize::new().working_directory("/tmp");
+
+        if let Some(path) = matches.get_one::<String>("log_output") {
             let file = std::fs::OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)
+                .truncate(true)
                 .open(path)
                 .expect("log output path does not exist.");
-            log_builder.target(env_logger::Target::Pipe(Box::new(file)));
+
+            daemon = daemon.stderr(file);
         }
-        None => {
-            log_builder.target(env_logger::Target::Stdout);
-        }
+        daemon.start().unwrap_or_else(|e| {
+            eprintln!("failed to daemonize: {e}");
+            std::process::exit(1);
+        });
     }
 
-    log_builder.init();
-
-    let local_port: u16 = matches
-        .get_one::<String>("local")
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
         .unwrap()
-        .parse()
-        .expect("bad local port");
+        .block_on(main_async(matches))
+        .unwrap();
+}
 
-    let remote_addr = tokio::net::lookup_host(matches.get_one::<String>("remote").unwrap())
-        .await
-        .expect("bad remote address or host")
-        .next()
-        .expect("unable to resolve remote host name");
-    info!("Remote address is: {}", remote_addr);
-
+async fn main_async(matches: ArgMatches) -> io::Result<()> {
     let tun_local: Ipv4Addr = matches
         .get_one::<String>("tun_local")
         .unwrap()
         .parse()
         .expect("bad local address for Tun interface");
+
     let tun_peer: Ipv4Addr = matches
         .get_one::<String>("tun_peer")
         .unwrap()
         .parse()
         .expect("bad peer address for Tun interface");
 
-    let udp_socks_amount: usize = matches
-        .get_one::<String>("udp_connections")
+    let local_port: u16 = matches
+        .get_one::<String>("local")
         .unwrap()
         .parse()
-        .expect("Unspecified number of UDP connections per each client");
-    if udp_socks_amount == 0 {
-        panic!("UDP connections should be greater than or equal to 1");
-    }
-
-    let encryption = matches
-        .get_one::<String>("encryption")
-        .map(Encryption::from);
-    debug!("Encryption in use: {:?}", encryption);
-    let encryption = Arc::new(encryption);
+        .expect("bad local port");
 
     let ipv4_only = matches.get_flag("ipv4_only");
 
@@ -242,27 +250,6 @@ async fn main() -> io::Result<()> {
                 .map(|v| v.parse().expect("bad peer address for Tun interface")),
         )
     };
-
-    let tun_name = matches.get_one::<String>("tun").unwrap();
-    let handshake_packet: Option<Vec<u8>> = matches
-        .get_one::<String>("handshake_packet")
-        .map(fs::read)
-        .transpose()?;
-    let handshake_packet = Arc::new(handshake_packet);
-
-    let tun = TunBuilder::new()
-        .name(tun_name) // if name is empty, then it is set by kernel.
-        .tap(false) // false (default): TUN, true: TAP.
-        .packet_info(false) // false: IFF_NO_PI, default is true.
-        .up() // or set it up manually using `sudo ip link set <tun-name> up`.
-        .address(tun_local)
-        .destination(tun_peer)
-        .try_build_mq(num_cpus)
-        .unwrap();
-
-    if let (Some(tun_local6), Some(tun_peer6)) = (tun_local6, tun_peer6) {
-        assign_ipv6_address(tun[0].name(), tun_local6, tun_peer6);
-    }
 
     let auto_rule = matches.get_one::<String>("auto_rule");
 
@@ -464,8 +451,6 @@ async fn main() -> io::Result<()> {
 
                 info!("Respective ip6tables rules removed.");
             }
-
-            std::process::exit(0);
         });
     } else {
         info!(
@@ -498,21 +483,62 @@ async fn main() -> io::Result<()> {
         exit_fn = Box::new(|| {});
     }
 
-    let daemonize = matches.get_flag("daemonize");
-    if daemonize {
-        daemonize::Daemonize::new()
-            .working_directory("/tmp")
-            .exit_action(exit_fn)
-            .start()
-            .unwrap_or_else(|e| {
-                error!("failed to daemonize: {e}");
-                std::process::exit(1);
-            });
-    } else {
-        ctrlc::set_handler(exit_fn).expect("Error setting Ctrl-C handler");
-    }
+    ctrlc::set_handler(move || {
+        exit_fn();
+        std::process::exit(0);
+    })
+    .expect("Error setting Ctrl-C handler");
+    let tun = TunBuilder::new()
+        .name(matches.get_one::<String>("tun").unwrap()) // if name is empty, then it is set by kernel.
+        .tap(false) // false (default): TUN, true: TAP.
+        .packet_info(false) // false: IFF_NO_PI, default is true.
+        .up() // or set it up manually using `sudo ip link set <tun-name> up`.
+        .address(tun_local)
+        .destination(tun_peer)
+        .try_build_mq(
+            matches
+                .get_one::<String>("tun_queues")
+                .unwrap()
+                .parse()
+                .unwrap(),
+        )
+        .unwrap();
 
     info!("Created TUN device {}", tun[0].name());
+
+    if let (Some(tun_local6), Some(tun_peer6)) = (tun_local6, tun_peer6) {
+        assign_ipv6_address(tun[0].name(), tun_local6, tun_peer6);
+        info!("IPv6 assigned to {}", tun[0].name());
+    }
+
+    let remote_addr = tokio::net::lookup_host(matches.get_one::<String>("remote").unwrap())
+        .await
+        .expect("bad remote address or host")
+        .next()
+        .expect("unable to resolve remote host name");
+
+    info!("Remote address is: {}", remote_addr);
+
+    let udp_socks_amount: usize = matches
+        .get_one::<String>("udp_connections")
+        .unwrap()
+        .parse()
+        .expect("Unspecified number of UDP connections per each client");
+    if udp_socks_amount == 0 {
+        panic!("UDP connections should be greater than or equal to 1");
+    }
+
+    let encryption = matches
+        .get_one::<String>("encryption")
+        .map(Encryption::from);
+    debug!("Encryption in use: {:?}", encryption);
+    let encryption = Arc::new(encryption);
+
+    let handshake_packet: Option<Vec<u8>> = matches
+        .get_one::<String>("handshake_packet")
+        .map(fs::read)
+        .transpose()?;
+    let handshake_packet = Arc::new(handshake_packet);
 
     let mut stack = Stack::new(tun, tun_local, tun_local6);
     stack.listen(local_port);
@@ -523,7 +549,6 @@ async fn main() -> io::Result<()> {
     }
     let mut addresses: HashMap<SocketAddr, TcpPeer, FxBuildHasher> = HashMap::default();
     let (addresses_tx, addresses_rx) = kanal::unbounded_async::<SocketAddr>();
-
     'main_loop: loop {
         let (tcp_sock, first_port) = tokio::select! {
             biased;

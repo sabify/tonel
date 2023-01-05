@@ -28,7 +28,8 @@ Tonel is a tool that is often used in situations where UDP is restricted or slow
 - Tonel is fast!
 - Tonel has almost zero allocations.
 - You can adjust the number of TCP and UDP connections in the Tonel client for each client connection.
-- You can adjust the number of UDP connections in the Tonel server for each Tonel client connection.
+- You can adjust the number of UDP connections in the Tonel server for each client connection.
+- You can adjust the number of TUN interface queues.
 - You can encrypt TCP connections.
 - You can configure the handshake packet for TCP connections in Tonel.
 
@@ -64,7 +65,10 @@ Now, start Tonel to listen on UDP port 1111 and forward udp packet over TCP to `
 Tonel server destination. We assume your network interface is `eth0`.
 
 ```bash
-tonelc --local 127.0.0.1:1111 --remote 127.0.0.1:2222 --auto-rule eth0
+# If you want to run tonelc root-less (linux only), use the following command:
+sudo setcap cap_net_admin=+pe tonelc
+
+sudo tonelc --local 127.0.0.1:1111 --remote 127.0.0.1:2222 --auto-rule eth0
 ```
 
 ## Server
@@ -81,7 +85,10 @@ Now, start Tonel to listen on TCP port 2222 and forward udp packet to `127.0.0.1
 remote destination. We assume your network interface is `eth0`.
 
 ```bash
-tonels --local 2222 --remote 127.0.0.1:3333 --auto-rule eth0
+# If you want to run tonels root-less (linux only), use the following command:
+sudo setcap cap_net_admin=+pe tonels
+
+sudo tonels --local 2222 --remote 127.0.0.1:3333 --auto-rule eth0
 ```
 
 # MTU overhead
@@ -155,8 +162,10 @@ Options:
                                        the first data packet to the server.
                                        Note: ensure this file's size does not exceed the MTU of the outgoing interface.
                                        The content is always sent out in a single packet and will not be further segmented
-      --tcp-connections <number>       Number of TCP connections per each client. [default: 1]
-      --udp-connections <number>       Number of UDP connections per each client. [default: 1]
+      --tcp-connections <number>       The number of TCP connections per each client. [default: 1]
+      --udp-connections <number>       The number of UDP connections per each client. [default: 1]
+      --tun-queues <number>            The number of queues for TUN interface. Default is
+                                       set to the number of CPU cores.
       --encryption <encryption>        Specify an encryption algorithm for using in TCP connections.
                                        Server and client should use the same encryption.
                                        Currently XOR is only supported and the format should be 'xor:key'.
@@ -164,8 +173,8 @@ Options:
                                        The argument needs the name of an active network interface
                                        that the firewall will route the traffic over it. (e.g. eth0)
       -d, --daemonize                  Start the process as a daemon.
-      --log-output                     Log output path. default is stdout.
-      --log-level                      Log output level. It could be one of the following:
+      --log-output <path>              Log output path. Default is stderr.
+      --log-level <level>              Log output level. It could be one of the following:
                                        off, error, warn, info, debug, trace.
   -h, --help                           Print help information
   -V, --version                        Print version information
@@ -197,13 +206,15 @@ Options:
       --encryption <encryption>        Specify an encryption algorithm for using in TCP connections.
                                        Server and client should use the same encryption.
                                        Currently XOR is only supported and the format should be 'xor:key'.
-      --udp-connections <number>       Number of UDP connections per each TCP connection. [default: 1]
+      --udp-connections <number>       The number of UDP connections per each client. [default: 1]
+      --tun-queues <number>            The number of queues for TUN interface. Default is
+                                       set to the number of CPU cores.
       --auto-rule <interface-name>     Automatically adds and removes required iptables and sysctl rules.
                                        The argument needs the name of an active network interface
                                        that the firewall will route the traffic over it. (e.g. eth0)
       -d, --daemonize                  Start the process as a daemon.
-      --log-output                     Log output path. default is stdout.
-      --log-level                      Log output level. It could be one of the following:
+      --log-output <path>              Log output path. Default is stderr.
+      --log-level <level>              Log output level. It could be one of the following:
                                        off, error, warn, info, debug, trace.
   -h, --help                           Print help information
   -V, --version                        Print version information
