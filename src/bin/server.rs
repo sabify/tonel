@@ -13,12 +13,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::broadcast;
-use tokio_tun::TunBuilder;
 use tokio_util::sync::CancellationToken;
 use tonel::tcp::packet::MAX_PACKET_LEN;
 use tonel::tcp::Stack;
 use tonel::utils::{assign_ipv6_address, new_udp_reuseport};
 use tonel::Encryption;
+use tun::Device;
 
 cfg_if! {
     if #[cfg(all(feature = "alloc-jem", not(target_env = "msvc")))] {
@@ -33,7 +33,6 @@ cfg_if! {
 }
 
 fn main() {
-    let num_cpus = num_cpus::get();
     let matches = Command::new("Tonel Server")
         .version(crate_version!())
         .author("Saber Haj Rabiee")
@@ -132,7 +131,7 @@ fn main() {
                 .required(false)
                 .value_name("number")
                 .help("The number of UDP connections per each client.")
-                .default_value(num_cpus.to_string())
+                .default_value("1")
         )
         .arg(
             Arg::new("tun_queues")
@@ -140,15 +139,15 @@ fn main() {
                 .required(false)
                 .value_name("number")
                 .help("The number of queues for TUN interface. Default is \n\
-                       set to the number of CPU cores.")
-                .default_value(num_cpus.to_string())
+                       set to 1. The platform should support multiple queue feature.")
+                .default_value("1")
                 )
         .arg(
             Arg::new("auto_rule")
                 .long("auto-rule")
                 .required(false)
                 .value_name("interface-name")
-                .help("Automatically adds and removes required iptables and sysctl rules.\n\
+                .help("Automatically adds and removes required firewall and sysctl rules.\n\
                 The argument needs the name of an active network interface \n\
                 that the firewall will route the traffic over it. (e.g. eth0)")
         )
@@ -488,27 +487,28 @@ async fn main_async(matches: ArgMatches) -> io::Result<()> {
         std::process::exit(0);
     })
     .expect("Error setting Ctrl-C handler");
-    let tun = TunBuilder::new()
-        .name(matches.get_one::<String>("tun").unwrap()) // if name is empty, then it is set by kernel.
-        .tap(false) // false (default): TUN, true: TAP.
-        .packet_info(false) // false: IFF_NO_PI, default is true.
-        .up() // or set it up manually using `sudo ip link set <tun-name> up`.
-        .address(tun_local)
-        .destination(tun_peer)
-        .try_build_mq(
-            matches
-                .get_one::<String>("tun_queues")
-                .unwrap()
-                .parse()
-                .unwrap(),
-        )
-        .unwrap();
 
-    info!("Created TUN device {}", tun[0].name());
+    let tun = tun::create(
+        tun::Configuration::default()
+            .name(matches.get_one::<String>("tun").unwrap()) // if name is empty, then it is set by kernel.
+            .address(tun_local)
+            .destination(tun_peer)
+            .up()
+            .queues(
+                matches
+                    .get_one::<String>("tun_queues")
+                    .unwrap()
+                    .parse()
+                    .unwrap(),
+            ),
+    )
+    .unwrap();
+
+    info!("Created TUN device {}", tun.name());
 
     if let (Some(tun_local6), Some(tun_peer6)) = (tun_local6, tun_peer6) {
-        assign_ipv6_address(tun[0].name(), tun_local6, tun_peer6);
-        info!("IPv6 assigned to {}", tun[0].name());
+        assign_ipv6_address(tun.name(), tun_local6, tun_peer6);
+        info!("IPv6 assigned to {}", tun.name());
     }
 
     let remote_addr = tokio::net::lookup_host(matches.get_one::<String>("remote").unwrap())

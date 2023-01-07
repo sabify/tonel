@@ -47,7 +47,6 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::time;
-use tokio_tun::Tun;
 
 const TIMEOUT: time::Duration = time::Duration::from_secs(3);
 // const RETRIES: usize = 2;
@@ -72,7 +71,7 @@ impl AddrTuple {
 struct Shared {
     tuples: DashMap<AddrTuple, kanal::AsyncSender<([u8; MAX_PACKET_LEN], usize)>, FxBuildHasher>,
     listening: DashSet<u16, FxBuildHasher>,
-    tuns: Vec<Arc<Tun>>,
+    tuns: Vec<Arc<tun::AsyncQueue>>,
     tun_index: AtomicUsize,
     ready: kanal::AsyncSender<(Socket, u16)>,
     tuples_purge: Arc<Vec<kanal::AsyncSender<AddrTuple>>>,
@@ -94,7 +93,7 @@ pub enum State {
 
 pub struct Socket {
     shared: Arc<Shared>,
-    tun: Arc<Tun>,
+    tun: Arc<tun::AsyncQueue>,
     incoming: kanal::AsyncReceiver<([u8; MAX_PACKET_LEN], usize)>,
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
@@ -113,7 +112,7 @@ pub struct Socket {
 impl Socket {
     fn new(
         shared: Arc<Shared>,
-        tun: Arc<Tun>,
+        tun: Arc<tun::AsyncQueue>,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
         seq: u32,
@@ -432,13 +431,7 @@ impl Drop for Socket {
         assert!(self.shared.tuples.remove(&tuple).is_some());
 
         let tuples_purge = self.shared.tuples_purge.clone();
-        tokio::spawn(async move {
-            for tx in tuples_purge.iter() {
-                if let Err(err) = tx.send(tuple.clone()).await {
-                    error!("Send error in tuples_purge: {err}");
-                }
-            }
-        });
+        let tun = self.tun.clone();
         let mut buf = [0u8; MAX_PACKET_LEN];
         let size = build_tcp_packet(
             &mut buf,
@@ -449,10 +442,16 @@ impl Drop for Socket {
             tcp::TcpFlags::RST,
             None,
         );
-        if let Err(e) = self.tun.try_send(&buf[..size]) {
-            warn!("Unable to send RST to remote end: {}", e);
-        }
-
+        tokio::spawn(async move {
+            for tx in tuples_purge.iter() {
+                if let Err(err) = tx.send(tuple.clone()).await {
+                    error!("Send error in tuples_purge: {err}");
+                }
+            }
+            if let Err(e) = tun.send(&buf[..size]).await {
+                warn!("Unable to send RST to remote end: {}", e);
+            }
+        });
         info!("TCP connection {} closed", self);
     }
 }
@@ -474,8 +473,15 @@ impl Stack {
     /// When more than one [`Tun`](tokio_tun::Tun) object is passed in, same amount
     /// of reader will be spawned later. This allows user to utilize the performance
     /// benefit of Multiqueue Tun support on machines with SMP.
-    pub fn new(tuns: Vec<Tun>, local_ip: Ipv4Addr, local_ip6: Option<Ipv6Addr>) -> Stack {
-        let tuns: Vec<Arc<Tun>> = tuns.into_iter().map(Arc::new).collect();
+    pub fn new<T>(tuns: T, local_ip: Ipv4Addr, local_ip6: Option<Ipv6Addr>) -> Stack
+    where
+        T: tun::Device<Queue = tun::platform::Queue>,
+    {
+        let tuns: Vec<Arc<tun::AsyncQueue>> = tuns
+            .queues()
+            .into_iter()
+            .map(|x| Arc::new(tun::AsyncQueue::new(x).unwrap()))
+            .collect();
         let (ready_tx, ready_rx) = kanal::bounded_async(MPSC_BUFFER_LEN);
         let (tuples_purge_tx, tuples_purge_rx) = {
             let mut senders = Vec::with_capacity(tuns.len());
@@ -566,7 +572,7 @@ impl Stack {
     }
 
     async fn reader_task(
-        tun: Arc<Tun>,
+        tun: Arc<tun::AsyncQueue>,
         shared: Arc<Shared>,
         tuples_purge: kanal::AsyncReceiver<AddrTuple>,
     ) {
@@ -658,7 +664,7 @@ impl Stack {
                         );
                         let tun_index = shared.tun_index.fetch_add(1, Ordering::Relaxed) % shared.tuns.len();
                         let tun = shared.tuns[tun_index].clone();
-                        if let Err(err) = tun.try_send(&send_buf[..size]) {
+                        if let Err(err) = tun.send(&send_buf[..size]).await {
                             error!("tun send error: {err}");
                         }
                     }

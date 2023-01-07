@@ -42,12 +42,10 @@ jobs:
           use-cross: true
           command: build
           args: --release --target ${{ matrix.target }}
-      - name: Rename artifacts and compress
+      - name: Compress
         run: |
           cd target/${{ matrix.target }}/release
-          mv client phantun_client
-          mv server phantun_server
-          zip phantun_${{ matrix.target }}.zip phantun_client phantun_server
+          zip tonel_${{ matrix.target }}.zip tonelc tonels
 
       - name: Upload Github Assets
         uses: softprops/action-gh-release@v1
