@@ -4,7 +4,7 @@ use clap::{crate_version, Arg, ArgAction, Command};
 use log::{debug, error, info, trace};
 use std::fs;
 use std::io;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::broadcast;

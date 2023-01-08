@@ -50,8 +50,17 @@ use tokio::time;
 
 const TIMEOUT: time::Duration = time::Duration::from_secs(3);
 // const RETRIES: usize = 2;
-const MPMC_BUFFER_LEN: usize = 1024;
-const MPSC_BUFFER_LEN: usize = 1024;
+const MPMC_BUFFER_LEN: usize = 4096;
+const MPSC_BUFFER_LEN: usize = 4096;
+
+type SocketAsyncSender = kanal::AsyncSender<(
+    object_pool::Reusable<'static, Box<[u8; MAX_PACKET_LEN]>>,
+    usize,
+)>;
+type SocketAsyncReceiver = kanal::AsyncReceiver<(
+    object_pool::Reusable<'static, Box<[u8; MAX_PACKET_LEN]>>,
+    usize,
+)>;
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 struct AddrTuple {
@@ -69,7 +78,7 @@ impl AddrTuple {
 }
 
 struct Shared {
-    tuples: DashMap<AddrTuple, kanal::AsyncSender<([u8; MAX_PACKET_LEN], usize)>, FxBuildHasher>,
+    tuples: DashMap<AddrTuple, SocketAsyncSender, FxBuildHasher>,
     listening: DashSet<u16, FxBuildHasher>,
     tuns: Vec<Arc<tun::AsyncQueue>>,
     tun_index: AtomicUsize,
@@ -94,7 +103,7 @@ pub enum State {
 pub struct Socket {
     shared: Arc<Shared>,
     tun: Arc<tun::AsyncQueue>,
-    incoming: kanal::AsyncReceiver<([u8; MAX_PACKET_LEN], usize)>,
+    incoming: SocketAsyncReceiver,
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
     seq: AtomicU32,
@@ -118,7 +127,7 @@ impl Socket {
         seq: u32,
         ack: u32,
         state: State,
-    ) -> (Socket, kanal::AsyncSender<([u8; MAX_PACKET_LEN], usize)>) {
+    ) -> (Socket, SocketAsyncSender) {
         let (incoming_tx, incoming_rx) = kanal::bounded_async(MPMC_BUFFER_LEN);
 
         (
@@ -467,6 +476,14 @@ impl fmt::Display for Socket {
     }
 }
 
+use once_cell::sync::Lazy;
+
+static GLOBAL_PACKET_POOL: Lazy<object_pool::Pool<Box<[u8; MAX_PACKET_LEN]>>> = Lazy::new(|| {
+    let pool: object_pool::Pool<Box<[u8; MAX_PACKET_LEN]>> =
+        object_pool::Pool::new(MPMC_BUFFER_LEN, || Box::new([0u8; MAX_PACKET_LEN]));
+    pool
+});
+
 /// A userspace TCP state machine
 impl Stack {
     /// Create a new stack, `tun` is an array of [`Tun`](tokio_tun::Tun).
@@ -576,14 +593,12 @@ impl Stack {
         shared: Arc<Shared>,
         tuples_purge: kanal::AsyncReceiver<AddrTuple>,
     ) {
-        let mut tuples: HashMap<
-            AddrTuple,
-            kanal::AsyncSender<([u8; MAX_PACKET_LEN], usize)>,
-            FxBuildHasher,
-        > = HashMap::default();
-        let mut recv_buf = [0u8; MAX_PACKET_LEN];
+        let mut tuples: HashMap<AddrTuple, SocketAsyncSender, FxBuildHasher> = HashMap::default();
+
         let mut send_buf = [0u8; MAX_PACKET_LEN];
         loop {
+            let mut recv_buf = GLOBAL_PACKET_POOL.pull(|| Box::new([0u8; MAX_PACKET_LEN]));
+
             tokio::select! {
                 biased;
                 tuple = tuples_purge.recv() => {
@@ -597,7 +612,7 @@ impl Stack {
                     tuples.remove(&tuple);
                     trace!("Removed cached tuple: {:?}", tuple);
                 },
-                size = tun.recv(&mut recv_buf) => {
+                size = tun.recv(&mut recv_buf[..]) => {
                     let size = match size {
                         Ok(size) => size,
                         Err(err) => {
@@ -606,7 +621,7 @@ impl Stack {
                         }
                     };
 
-                    let (ip_packet, tcp_packet) = match parse_ip_packet(&recv_buf) {
+                    let (ip_packet, tcp_packet) = match parse_ip_packet(&recv_buf[..]) {
                         Some(data) => data,
                         None => continue,
                     };
