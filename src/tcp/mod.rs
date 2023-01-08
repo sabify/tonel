@@ -621,7 +621,7 @@ impl Stack {
                         }
                     };
 
-                    let (ip_packet, tcp_packet) = match parse_ip_packet(&recv_buf[..]) {
+                    let (ip_packet, tcp_packet) = match parse_ip_packet(&recv_buf[..size]) {
                         Some(data) => data,
                         None => continue,
                     };
