@@ -640,6 +640,7 @@ impl Stack {
                     }
 
                     if let Some(c) = shared.tuples.get(&tuple) {
+                        tuples.insert(tuple.clone(), c.clone());
                         if let Err(err) = c.send((recv_buf, size)).await {
                             drop(c);
                             error!("Couldn't send to shared tuples channel: {err}");
@@ -660,7 +661,8 @@ impl Stack {
                             tcp_packet.get_sequence() + 1,
                             State::Idle,
                         );
-                        assert!(shared.tuples.insert(tuple, incoming).is_none());
+                        assert!(shared.tuples.insert(tuple.clone(), incoming.clone()).is_none());
+                        tuples.insert(tuple, incoming);
                         let seq = tcp_packet.get_sequence();
                         tokio::spawn(async move {
                             let mut buf = [0u8; MAX_PACKET_LEN];
