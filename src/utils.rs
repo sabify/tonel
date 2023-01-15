@@ -1,3 +1,4 @@
+#[cfg(any(target_os = "linux", target_os = "android"))]
 use neli::{
     consts::{
         nl::{NlmF, NlmFFlags},
@@ -9,7 +10,8 @@ use neli::{
     socket::NlSocketHandle,
     types::RtBuffer,
 };
-use std::net::{Ipv6Addr, SocketAddr};
+
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use tokio::net::UdpSocket;
 
 pub fn new_udp_reuseport(local_addr: SocketAddr) -> std::io::Result<UdpSocket> {
@@ -32,29 +34,46 @@ pub fn new_udp_reuseport(local_addr: SocketAddr) -> std::io::Result<UdpSocket> {
     udp_sock.try_into()
 }
 
-pub fn assign_ipv6_address(device_name: &str, local: Ipv6Addr, peer: Ipv6Addr) {
-    let index = nix::net::if_::if_nametoindex(device_name).unwrap();
+pub fn assign_ipv6_address(
+    device_name: &str,
+    local: Ipv6Addr,
+    #[cfg(any(target_os = "linux", target_os = "android"))] peer: Ipv6Addr,
+) {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        let index = nix::net::if_::if_nametoindex(device_name).unwrap();
 
-    let mut rtnl = NlSocketHandle::connect(NlFamily::Route, None, &[]).unwrap();
-    let mut rtattrs = RtBuffer::new();
-    rtattrs.push(Rtattr::new(None, Ifa::Local, &local.octets()[..]).unwrap());
-    rtattrs.push(Rtattr::new(None, Ifa::Address, &peer.octets()[..]).unwrap());
+        let mut rtnl = NlSocketHandle::connect(NlFamily::Route, None, &[]).unwrap();
+        let mut rtattrs = RtBuffer::new();
+        rtattrs.push(Rtattr::new(None, Ifa::Local, &local.octets()[..]).unwrap());
+        rtattrs.push(Rtattr::new(None, Ifa::Address, &peer.octets()[..]).unwrap());
 
-    let ifaddrmsg = Ifaddrmsg {
-        ifa_family: RtAddrFamily::Inet6,
-        ifa_prefixlen: 128,
-        ifa_flags: IfaFFlags::empty(),
-        ifa_scope: 0,
-        ifa_index: index as i32,
-        rtattrs,
-    };
-    let nl_header = Nlmsghdr::new(
-        None,
-        Rtm::Newaddr,
-        NlmFFlags::new(&[NlmF::Request]),
-        None,
-        None,
-        NlPayload::Payload(ifaddrmsg),
-    );
-    rtnl.send(nl_header).unwrap();
+        let ifaddrmsg = Ifaddrmsg {
+            ifa_family: RtAddrFamily::Inet6,
+            ifa_prefixlen: 128,
+            ifa_flags: IfaFFlags::empty(),
+            ifa_scope: 0,
+            ifa_index: index as i32,
+            rtattrs,
+        };
+        let nl_header = Nlmsghdr::new(
+            None,
+            Rtm::Newaddr,
+            NlmFFlags::new(&[NlmF::Request]),
+            None,
+            None,
+            NlPayload::Payload(ifaddrmsg),
+        );
+        rtnl.send(nl_header).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("ifconfig")
+            .arg(device_name)
+            .arg("inet6")
+            .arg(format!("{local}/128"))
+            .status()
+            .unwrap_or_else(|e| panic!("ifconfig set IPv6 local address failed {e}"));
+    }
 }

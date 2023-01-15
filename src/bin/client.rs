@@ -4,7 +4,7 @@ use clap::{crate_version, Arg, ArgAction, Command};
 use log::{debug, error, info, trace};
 use std::fs;
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::broadcast;
@@ -59,7 +59,6 @@ fn main() {
                 .required(false)
                 .value_name("tunX")
                 .help("Sets the Tun interface name, if absent, pick the next available name")
-                .default_value("")
         )
         .arg(
             Arg::new("tun_local")
@@ -261,235 +260,16 @@ async fn main_async(matches: ArgMatches) -> io::Result<()> {
         (None, None)
     } else {
         (
-            matches
-                .get_one::<String>("tun_local6")
-                .map(|v| v.parse().expect("bad local address for Tun interface")),
-            matches
-                .get_one::<String>("tun_peer6")
-                .map(|v| v.parse().expect("bad peer address for Tun interface")),
+            matches.get_one::<String>("tun_local6").map(|v| {
+                v.parse::<Ipv6Addr>()
+                    .expect("bad local address for Tun interface")
+            }),
+            matches.get_one::<String>("tun_peer6").map(|v| {
+                v.parse::<Ipv6Addr>()
+                    .expect("bad peer address for Tun interface")
+            }),
         )
     };
-
-    let exit_fn: Box<dyn Fn() + 'static + Send>;
-
-    let auto_rule = matches.get_one::<String>("auto_rule");
-
-    if let Some(dev_name) = auto_rule {
-        let ipv4_forward_value = std::process::Command::new("sysctl")
-            .arg("net.ipv4.ip_forward")
-            .output()
-            .expect("sysctl net.ipv4.ip_forward could not be executed.");
-
-        if !ipv4_forward_value.status.success() {
-            panic!(
-                "sysctl net.ipv4.ip_forward could not be executed successfully: {}.",
-                ipv4_forward_value.status
-            );
-        }
-
-        let status = std::process::Command::new("sysctl")
-            .arg("-w")
-            .arg("net.ipv4.ip_forward=1")
-            .output()
-            .expect("sysctl -w net.ipv4.ip_forward=1 could not be executed.")
-            .status;
-
-        if !status.success() {
-            panic!("sysctl -w net.ipv4.ip_forward=1 could not be executed successfully: {status}.");
-        }
-
-        info!("sysctl -w net.ipv4.ip_forward=1 has been set.");
-
-        let ipv4_forward_value: String = String::from_utf8(ipv4_forward_value.stdout)
-            .unwrap()
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect();
-
-        // let ipv4_forward_value = OsString::from(ipv4_forward_value);
-        let ipv6_forward_value: Option<String> = if !ipv4_only {
-            let ipv6_forward_value = std::process::Command::new("sysctl")
-                .arg("net.ipv6.conf.all.forwarding")
-                .output()
-                .expect("sysctl net.ipv6.conf.all.forwarding could not be executed.");
-
-            if !ipv6_forward_value.status.success() {
-                panic!(
-                    "sysctl net.ipv6.conf.all.forwarding could not be executed successfully: {}.",
-                    ipv6_forward_value.status
-                );
-            }
-
-            let status = std::process::Command::new("sysctl")
-                .arg("-w")
-                .arg("net.ipv6.conf.all.forwarding=1")
-                .output()
-                .expect("sysctl -w net.ipv6.conf.all.forwarding=1 could not be executed.")
-                .status;
-
-            if !status.success() {
-                panic!("sysctl -w net.ipv6.conf.all.forwarding=1 could not be executed successfully: {status}.");
-            }
-
-            info!("sysctl -w net.ipv6.conf.all.forwarding=1 has been set.");
-
-            Some(
-                String::from_utf8(ipv6_forward_value.stdout)
-                    .unwrap()
-                    .chars()
-                    .filter(|c| !c.is_whitespace())
-                    .collect(),
-            )
-        } else {
-            None
-        };
-
-        let iptables_add_rule = format!(
-            "-t nat -I POSTROUTING -o {dev_name} -p tcp --dport {} -j MASQUERADE",
-            remote_addr.port()
-        );
-        let ip6tables_add_rule = format!(
-            "-t nat -I POSTROUTING -o {dev_name} -p tcp --dport {} -j MASQUERADE",
-            remote_addr.port()
-        );
-
-        let iptables_del_rule = format!(
-            "-t nat -D POSTROUTING -o {dev_name} -p tcp --dport {} -j MASQUERADE",
-            remote_addr.port()
-        );
-        let ip6tables_del_rule = format!(
-            "-t nat -D POSTROUTING -o {dev_name} -p tcp --dport {} -j MASQUERADE",
-            remote_addr.port()
-        );
-
-        let status = std::process::Command::new("iptables")
-            .args(iptables_add_rule.split(' '))
-            .output()
-            .expect("iptables could not be executed.")
-            .status;
-
-        if !status.success() {
-            panic!("{iptables_add_rule} could not be executed successfully: {status}.");
-        }
-
-        info!("iptables has been configured.");
-
-        if !ipv4_only {
-            let status = std::process::Command::new("ip6tables")
-                .args(ip6tables_add_rule.split(' '))
-                .output()
-                .expect("ip6tables could not be executed.")
-                .status;
-
-            if !status.success() {
-                panic!("{ip6tables_add_rule} could not be executed successfully: {status}.");
-            }
-
-            info!("ip6tables has been configured.");
-        }
-
-        exit_fn = Box::new(move || {
-            let status = std::process::Command::new("sysctl")
-                .arg("-w")
-                .arg(&ipv4_forward_value)
-                .output()
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "sysctl -w '{:?}' could not be executed: {err}.",
-                        ipv4_forward_value
-                    )
-                })
-                .status;
-            if !status.success() {
-                panic!(
-                    "sysctl -w '{:?}' could not be executed successfully: {status}.",
-                    ipv4_forward_value
-                );
-            }
-
-            info!("sysctl ipv4 forwarding value reverted back to original value.");
-
-            if !ipv4_only {
-                let status = std::process::Command::new("sysctl")
-                    .arg("-w")
-                    .arg(ipv6_forward_value.as_ref().unwrap())
-                    .output()
-                    .unwrap_or_else(|err| {
-                        panic!(
-                            "sysctl -w '{:?}' could not be executed: {err}.",
-                            ipv6_forward_value
-                        )
-                    })
-                    .status;
-                if !status.success() {
-                    panic!(
-                        "sysctl -w '{:?}' could not be executed successfully: {status}.",
-                        ipv6_forward_value
-                    );
-                }
-
-                info!("sysctl ipv6 forwarding value reverted back to original value.");
-            }
-
-            let status = std::process::Command::new("iptables")
-                .args(iptables_del_rule.split(' '))
-                .output()
-                .expect("iptables could not be executed.")
-                .status;
-
-            if !status.success() {
-                panic!("{iptables_del_rule} could not be executed successfully: {status}.");
-            }
-
-            info!("Respective iptables rules removed.");
-
-            if !ipv4_only {
-                let status = std::process::Command::new("ip6tables")
-                    .args(ip6tables_del_rule.split(' '))
-                    .output()
-                    .expect("ip6tables could not be executed.")
-                    .status;
-
-                if !status.success() {
-                    panic!("{ip6tables_del_rule} could not be executed successfully: {status}.");
-                }
-
-                info!("Respective ip6tables rules removed.");
-            }
-        });
-    } else {
-        info!(
-            "Make sure ip forwarding is enabled, run the following commands: \n\
-            sysctl -w net.ipv4.ip_forward=1 \n\
-            sysctl -w net.ipv6.conf.all.forwarding=1"
-        );
-
-        if ipv4_only {
-            info!(
-                "Make sure your firewall routes packets, replace the dev_name with \n\
-                your active network interface (like eth0) and run the following commands for iptables: \n\
-                iptables -t nat -I POSTROUTING -o dev_name -p tcp --dport {} -j MASQUERADE",
-                remote_addr.port(),
-            );
-        } else {
-            info!(
-                "Make sure your firewall routes packets, replace the dev_name with \n\
-                your active network interface (like eth0) and run the following commands for iptables: \n\
-                iptables -t nat -I POSTROUTING -o dev_name -p tcp --dport {} -j MASQUERADE\n\
-                ip6tables -t nat -I POSTROUTING -o dev_name -p tcp --dport {} -j MASQUERADE",
-                remote_addr.port(),
-                remote_addr.port(),
-            );
-        }
-
-        exit_fn = Box::new(|| {});
-    }
-
-    ctrlc::set_handler(move || {
-        exit_fn();
-        std::process::exit(0);
-    })
-    .expect("Error setting Ctrl-C handler");
 
     let tcp_socks_amount: usize = matches
         .get_one::<String>("tcp_connections")
@@ -522,24 +302,83 @@ async fn main_async(matches: ArgMatches) -> io::Result<()> {
             .transpose()?,
     );
 
-    let tun = tun::create(
-        tun::Configuration::default()
-            .name(matches.get_one::<String>("tun").unwrap()) // if name is empty, then it is set by kernel.
-            .address(tun_local)
-            .destination(tun_peer)
-            .up()
-            .queues(
-                matches
-                    .get_one::<String>("tun_queues")
-                    .unwrap()
-                    .parse()
-                    .unwrap(),
-            ),
-    )
-    .unwrap();
+    let mut tun_config = tun::Configuration::default();
+    tun_config
+        .address(tun_local)
+        .destination(tun_peer)
+        .up()
+        .queues(
+            matches
+                .get_one::<String>("tun_queues")
+                .unwrap()
+                .parse()
+                .unwrap(),
+        );
+    if let Some(name) = matches.get_one::<String>("tun") {
+        tun_config.name(name);
+    }
+
+    let tun = tun::create(&tun_config).unwrap();
+
+    let exit_fn: Box<dyn Fn() + 'static + Send> = if let Some(_dev_name) =
+        matches.get_one::<String>("auto_rule")
+    {
+        cfg_if! {
+            if #[cfg(target_os = "linux")] {
+                auto_rule(
+                    _dev_name,
+                    ipv4_only,
+                    remote_addr,
+                )
+            } else if
+                #[cfg(target_os = "macos")] {
+                auto_rule(
+                    tun.name(),
+                    ipv4_only,
+                )
+            }
+        }
+    } else {
+        info!(
+            "Make sure ip forwarding is enabled, run the following commands: \n\
+            sysctl -w net.ipv4.ip_forward=1 \n\
+            sysctl -w net.ipv6.conf.all.forwarding=1"
+        );
+
+        if ipv4_only {
+            info!(
+                "Make sure your firewall routes packets, replace the dev_name with \n\
+                your active network interface (like eth0) and run the following commands for iptables: \n\
+                iptables -t nat -I POSTROUTING -o dev_name -p tcp --dport {} -j MASQUERADE",
+                remote_addr.port(),
+            );
+        } else {
+            info!(
+                "Make sure your firewall routes packets, replace the dev_name with \n\
+                your active network interface (like eth0) and run the following commands for iptables: \n\
+                iptables -t nat -I POSTROUTING -o dev_name -p tcp --dport {} -j MASQUERADE\n\
+                ip6tables -t nat -I POSTROUTING -o dev_name -p tcp --dport {} -j MASQUERADE",
+                remote_addr.port(),
+                remote_addr.port(),
+            );
+        }
+
+        Box::new(|| {})
+    };
+
+    ctrlc::set_handler(move || {
+        exit_fn();
+        std::process::exit(0);
+    })
+    .expect("Error setting Ctrl-C handler");
 
     if remote_addr.is_ipv6() {
-        tonel::utils::assign_ipv6_address(tun.name(), tun_local6.unwrap(), tun_peer6.unwrap());
+        tonel::utils::assign_ipv6_address(
+            tun.name(),
+            tun_local6.unwrap(),
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            tun_peer6.unwrap(),
+        );
     }
 
     info!("Created TUN device {}", tun.name());
@@ -782,4 +621,310 @@ impl TcpConnect {
         }
         self.cancellation.cancel();
     }
+}
+
+#[cfg(target_os = "linux")]
+fn auto_rule(
+    dev_name: &str,
+    ipv4_only: bool,
+    remote_addr: SocketAddr,
+) -> Box<dyn Fn() + 'static + Send> {
+    let ipv4_forward_value = std::process::Command::new("sysctl")
+        .arg("net.ipv4.ip_forward")
+        .output()
+        .expect("sysctl net.ipv4.ip_forward could not be executed.");
+
+    if !ipv4_forward_value.status.success() {
+        panic!(
+            "sysctl net.ipv4.ip_forward could not be executed successfully: {}.",
+            ipv4_forward_value.status
+        );
+    }
+
+    let status = std::process::Command::new("sysctl")
+        .arg("-w")
+        .arg("net.ipv4.ip_forward=1")
+        .output()
+        .expect("sysctl -w net.ipv4.ip_forward=1 could not be executed.")
+        .status;
+
+    if !status.success() {
+        panic!("sysctl -w net.ipv4.ip_forward=1 could not be executed successfully: {status}.");
+    }
+
+    info!("sysctl -w net.ipv4.ip_forward=1 has been set.");
+
+    let ipv4_forward_value: String = String::from_utf8(ipv4_forward_value.stdout)
+        .unwrap()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+
+    // let ipv4_forward_value = OsString::from(ipv4_forward_value);
+    let ipv6_forward_value: Option<String> = if !ipv4_only {
+        let ipv6_forward_value = std::process::Command::new("sysctl")
+            .arg("net.ipv6.conf.all.forwarding")
+            .output()
+            .expect("sysctl net.ipv6.conf.all.forwarding could not be executed.");
+
+        if !ipv6_forward_value.status.success() {
+            panic!(
+                "sysctl net.ipv6.conf.all.forwarding could not be executed successfully: {}.",
+                ipv6_forward_value.status
+            );
+        }
+
+        let status = std::process::Command::new("sysctl")
+            .arg("-w")
+            .arg("net.ipv6.conf.all.forwarding=1")
+            .output()
+            .expect("sysctl -w net.ipv6.conf.all.forwarding=1 could not be executed.")
+            .status;
+
+        if !status.success() {
+            panic!("sysctl -w net.ipv6.conf.all.forwarding=1 could not be executed successfully: {status}.");
+        }
+
+        info!("sysctl -w net.ipv6.conf.all.forwarding=1 has been set.");
+
+        Some(
+            String::from_utf8(ipv6_forward_value.stdout)
+                .unwrap()
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect(),
+        )
+    } else {
+        None
+    };
+
+    let iptables_add_rule = format!(
+        "-t nat -I POSTROUTING -o {dev_name} -p tcp --dport {} -j MASQUERADE",
+        remote_addr.port()
+    );
+    let ip6tables_add_rule = format!(
+        "-t nat -I POSTROUTING -o {dev_name} -p tcp --dport {} -j MASQUERADE",
+        remote_addr.port()
+    );
+
+    let iptables_del_rule = format!(
+        "-t nat -D POSTROUTING -o {dev_name} -p tcp --dport {} -j MASQUERADE",
+        remote_addr.port()
+    );
+    let ip6tables_del_rule = format!(
+        "-t nat -D POSTROUTING -o {dev_name} -p tcp --dport {} -j MASQUERADE",
+        remote_addr.port()
+    );
+
+    let status = std::process::Command::new("iptables")
+        .args(iptables_add_rule.split(' '))
+        .output()
+        .expect("iptables could not be executed.")
+        .status;
+
+    if !status.success() {
+        panic!("{iptables_add_rule} could not be executed successfully: {status}.");
+    }
+
+    info!("iptables has been configured.");
+
+    if !ipv4_only {
+        let status = std::process::Command::new("ip6tables")
+            .args(ip6tables_add_rule.split(' '))
+            .output()
+            .expect("ip6tables could not be executed.")
+            .status;
+
+        if !status.success() {
+            panic!("{ip6tables_add_rule} could not be executed successfully: {status}.");
+        }
+
+        info!("ip6tables has been configured.");
+    }
+    Box::new(move || {
+        let status = std::process::Command::new("sysctl")
+            .arg("-w")
+            .arg(&ipv4_forward_value)
+            .output()
+            .unwrap_or_else(|err| {
+                panic!(
+                    "sysctl -w '{:?}' could not be executed: {err}.",
+                    ipv4_forward_value
+                )
+            })
+            .status;
+        if !status.success() {
+            panic!(
+                "sysctl -w '{:?}' could not be executed successfully: {status}.",
+                ipv4_forward_value
+            );
+        }
+
+        info!("sysctl ipv4 forwarding value reverted back to original value.");
+
+        if !ipv4_only {
+            let status = std::process::Command::new("sysctl")
+                .arg("-w")
+                .arg(ipv6_forward_value.as_ref().unwrap())
+                .output()
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "sysctl -w '{:?}' could not be executed: {err}.",
+                        ipv6_forward_value
+                    )
+                })
+                .status;
+            if !status.success() {
+                panic!(
+                    "sysctl -w '{:?}' could not be executed successfully: {status}.",
+                    ipv6_forward_value
+                );
+            }
+
+            info!("sysctl ipv6 forwarding value reverted back to original value.");
+        }
+
+        let status = std::process::Command::new("iptables")
+            .args(iptables_del_rule.split(' '))
+            .output()
+            .expect("iptables could not be executed.")
+            .status;
+
+        if !status.success() {
+            panic!("{iptables_del_rule} could not be executed successfully: {status}.");
+        }
+
+        info!("Respective iptables rules removed.");
+
+        if !ipv4_only {
+            let status = std::process::Command::new("ip6tables")
+                .args(ip6tables_del_rule.split(' '))
+                .output()
+                .expect("ip6tables could not be executed.")
+                .status;
+
+            if !status.success() {
+                panic!("{ip6tables_del_rule} could not be executed successfully: {status}.");
+            }
+
+            info!("Respective ip6tables rules removed.");
+        }
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn auto_rule(dev_name: &str, ipv4_only: bool) -> Box<dyn Fn() + 'static + Send> {
+    let ipv4_forward_value = std::process::Command::new("sysctl")
+        .arg("net.inet.ip.forwarding")
+        .output()
+        .expect("sysctl net.inet.ip.forwarding could not be executed.");
+
+    if !ipv4_forward_value.status.success() {
+        panic!(
+            "sysctl net.inet.ip.forwarding could not be executed successfully: {}.",
+            ipv4_forward_value.status
+        );
+    }
+
+    let status = std::process::Command::new("sysctl")
+        .arg("net.inet.ip.forwarding=1")
+        .output()
+        .expect("sysctl net.inet.ip.forwarding=1 could not be executed.")
+        .status;
+
+    if !status.success() {
+        panic!("sysctl net.inet.ip.forwarding=1 could not be executed successfully: {status}.");
+    }
+
+    info!("sysctl net.inet.ip.forwarding=1 has been set.");
+
+    let ipv4_forward_value: String = String::from_utf8(ipv4_forward_value.stdout)
+        .unwrap()
+        .replace(": ", "=")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+
+    // let ipv4_forward_value = OsString::from(ipv4_forward_value);
+    let ipv6_forward_value: Option<String> = if !ipv4_only {
+        let ipv6_forward_value = std::process::Command::new("sysctl")
+            .arg("net.inet6.ip6.forwarding")
+            .output()
+            .expect("sysctl net.inet6.ip6.forwarding could not be executed.");
+
+        if !ipv6_forward_value.status.success() {
+            panic!(
+                "sysctl net.inet6.ip6.forwarding could not be executed successfully: {}.",
+                ipv6_forward_value.status
+            );
+        }
+
+        let status = std::process::Command::new("sysctl")
+            .arg("-w")
+            .arg("net.inet6.ip6.forwarding=1")
+            .output()
+            .expect("sysctl -w net.inet6.ip6.forwarding=1 could not be executed.")
+            .status;
+
+        if !status.success() {
+            panic!(
+                "sysctl net.inet6.ip6.forwarding=1 could not be executed successfully: {status}."
+            );
+        }
+
+        info!("sysctl net.inet6.ip6.forwarding=1 has been set.");
+
+        Some(
+            String::from_utf8(ipv6_forward_value.stdout)
+                .unwrap()
+                .replace(": ", "=")
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect(),
+        )
+    } else {
+        None
+    };
+
+    Box::new(move || {
+        let status = std::process::Command::new("sysctl")
+            .arg(&ipv4_forward_value)
+            .output()
+            .unwrap_or_else(|err| {
+                panic!(
+                    "sysctl '{:?}' could not be executed: {err}.",
+                    ipv4_forward_value
+                )
+            })
+            .status;
+        if !status.success() {
+            panic!(
+                "sysctl '{:?}' could not be executed successfully: {status}.",
+                ipv4_forward_value
+            );
+        }
+
+        info!("sysctl ipv4 forwarding value reverted back to original value.");
+
+        if !ipv4_only {
+            let status = std::process::Command::new("sysctl")
+                .arg(ipv6_forward_value.as_ref().unwrap())
+                .output()
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "sysctl '{:?}' could not be executed: {err}.",
+                        ipv6_forward_value
+                    )
+                })
+                .status;
+            if !status.success() {
+                panic!(
+                    "sysctl '{:?}' could not be executed successfully: {status}.",
+                    ipv6_forward_value
+                );
+            }
+
+            info!("sysctl ipv6 forwarding value reverted back to original value.");
+        }
+    })
 }
