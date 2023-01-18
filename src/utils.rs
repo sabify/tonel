@@ -34,12 +34,8 @@ pub fn new_udp_reuseport(local_addr: SocketAddr) -> std::io::Result<UdpSocket> {
     udp_sock.try_into()
 }
 
-pub fn assign_ipv6_address(
-    device_name: &str,
-    local: Ipv6Addr,
-    #[cfg(any(target_os = "linux", target_os = "android"))] peer: Ipv6Addr,
-) {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub fn assign_ipv6_address(device_name: &str, local: Ipv6Addr, peer: Ipv6Addr) {
     {
         let index = nix::net::if_::if_nametoindex(device_name).unwrap();
 
@@ -50,7 +46,7 @@ pub fn assign_ipv6_address(
 
         let ifaddrmsg = Ifaddrmsg {
             ifa_family: RtAddrFamily::Inet6,
-            ifa_prefixlen: 128,
+            ifa_prefixlen: 64,
             ifa_flags: IfaFFlags::empty(),
             ifa_scope: 0,
             ifa_index: index as i32,
@@ -66,14 +62,83 @@ pub fn assign_ipv6_address(
         );
         rtnl.send(nl_header).unwrap();
     }
+}
 
-    #[cfg(target_os = "macos")]
+#[cfg(any(
+    target_os = "openbsd",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "dragonfly",
+    target_os = "macos",
+))]
+pub fn assign_ipv6_address(dev_name: &str, local: Ipv6Addr) {
     {
         std::process::Command::new("ifconfig")
-            .arg(device_name)
+            .arg(dev_name)
             .arg("inet6")
-            .arg(format!("{local}/128"))
+            .arg(format!("{local}/64"))
             .status()
             .unwrap_or_else(|e| panic!("ifconfig set IPv6 local address failed {e}"));
+    }
+}
+
+#[cfg(any(
+    target_os = "openbsd",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "dragonfly",
+    target_os = "macos",
+))]
+pub fn add_routes(dev_name: &str, peer: Ipv4Addr, peer6: Option<Ipv6Addr>) {
+    let interface_keyword = "-interface";
+    #[cfg(target_os = "openbsd")]
+    let interface_keyword = "-iface";
+    let _ = std::process::Command::new("route")
+        .arg("-q")
+        .arg("-n")
+        .arg("add")
+        .arg("-inet")
+        .arg(format!("{peer}/24"))
+        .arg(interface_keyword)
+        .arg(dev_name)
+        .output();
+
+    if let Some(peer6) = peer6 {
+        let _ = std::process::Command::new("route")
+            .arg("-q")
+            .arg("-n")
+            .arg("add")
+            .arg("-inet6")
+            .arg(format!("{peer6}/64"))
+            .arg(interface_keyword)
+            .arg(dev_name)
+            .output();
+    }
+}
+
+#[cfg(any(
+    target_os = "openbsd",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "dragonfly",
+    target_os = "macos",
+))]
+pub fn delete_routes(peer: Ipv4Addr, peer6: Option<Ipv6Addr>) {
+    let _ = std::process::Command::new("route")
+        .arg("-q")
+        .arg("-n")
+        .arg("delete")
+        .arg("-inet")
+        .arg(format!("{peer}/24"))
+        .output();
+
+    if let Some(peer6) = peer6 {
+        let _ = std::process::Command::new("route")
+            .arg("-q")
+            .arg("-n")
+            .arg("delete")
+            .arg("-inet6")
+            .arg(format!("{peer6}/64"))
+            .output();
     }
 }

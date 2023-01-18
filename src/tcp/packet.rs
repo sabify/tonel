@@ -1,4 +1,5 @@
 use internet_checksum::Checksum;
+use nix::libc::{AF_INET, AF_INET6};
 use pnet::packet::Packet;
 use pnet::packet::{ip, ipv4, ipv6, tcp};
 use std::convert::TryInto;
@@ -8,6 +9,23 @@ use zeroize::Zeroize;
 const IPV4_HEADER_LEN: usize = 20;
 const IPV6_HEADER_LEN: usize = 40;
 const TCP_HEADER_LEN: usize = 20;
+#[cfg(any(
+    target_os = "openbsd",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "dragonfly",
+    target_os = "macos",
+    target_os = "ios"
+))]
+pub const MAX_PACKET_LEN: usize = 1504;
+#[cfg(not(any(
+    target_os = "openbsd",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "dragonfly",
+    target_os = "macos",
+    target_os = "ios"
+)))]
 pub const MAX_PACKET_LEN: usize = 1500;
 
 pub enum IPPacket<'p> {
@@ -48,12 +66,31 @@ pub fn build_tcp_packet(
     let tcp_header_len = TCP_HEADER_LEN + if wscale { 4 } else { 0 }; // nop + wscale
     let tcp_total_len = tcp_header_len + payload.map_or(0, |payload| payload.len());
     let total_len = ip_header_len + tcp_total_len;
+    #[cfg(not(any(
+        target_os = "openbsd",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "dragonfly",
+        target_os = "macos",
+        target_os = "ios"
+    )))]
+    let offset = 0;
+    #[cfg(any(
+        target_os = "openbsd",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "dragonfly",
+        target_os = "macos",
+        target_os = "ios"
+    ))]
+    let offset = 4;
 
     buf[..total_len].zeroize();
 
     match (local_addr, remote_addr) {
         (SocketAddr::V4(local), SocketAddr::V4(remote)) => {
-            let mut v4 = ipv4::MutableIpv4Packet::new(&mut buf[..ip_header_len]).unwrap();
+            let mut v4 =
+                ipv4::MutableIpv4Packet::new(&mut buf[offset..ip_header_len + offset]).unwrap();
             v4.set_version(4);
             v4.set_header_length(IPV4_HEADER_LEN as u8 / 4);
             v4.set_next_level_protocol(ip::IpNextHeaderProtocols::Tcp);
@@ -65,20 +102,46 @@ pub fn build_tcp_packet(
             let mut cksm = Checksum::new();
             cksm.add_bytes(v4.packet());
             v4.set_checksum(u16::from_be_bytes(cksm.checksum()));
+
+            #[cfg(any(
+                target_os = "openbsd",
+                target_os = "freebsd",
+                target_os = "netbsd",
+                target_os = "dragonfly",
+                target_os = "macos",
+                target_os = "ios"
+            ))]
+            {
+                buf[3] = AF_INET as u8;
+            }
         }
         (SocketAddr::V6(local), SocketAddr::V6(remote)) => {
-            let mut v6 = ipv6::MutableIpv6Packet::new(&mut buf[..ip_header_len]).unwrap();
+            let mut v6 =
+                ipv6::MutableIpv6Packet::new(&mut buf[offset..ip_header_len + offset]).unwrap();
             v6.set_version(6);
             v6.set_payload_length(tcp_total_len.try_into().unwrap());
             v6.set_next_header(ip::IpNextHeaderProtocols::Tcp);
             v6.set_hop_limit(64);
             v6.set_source(*local.ip());
             v6.set_destination(*remote.ip());
+
+            #[cfg(any(
+                target_os = "openbsd",
+                target_os = "freebsd",
+                target_os = "netbsd",
+                target_os = "dragonfly",
+                target_os = "macos",
+                target_os = "ios"
+            ))]
+            {
+                buf[3] = AF_INET6 as u8;
+            }
         }
         _ => unreachable!(),
     };
 
-    let mut tcp = tcp::MutableTcpPacket::new(&mut buf[ip_header_len..total_len]).unwrap();
+    let mut tcp =
+        tcp::MutableTcpPacket::new(&mut buf[ip_header_len + offset..total_len + offset]).unwrap();
     tcp.set_window(0xffff);
     tcp.set_source(local_addr.port());
     tcp.set_destination(remote_addr.port());
@@ -121,10 +184,29 @@ pub fn build_tcp_packet(
     cksm.add_bytes(tcp.packet());
     tcp.set_checksum(u16::from_be_bytes(cksm.checksum()));
 
-    total_len
+    total_len + offset
 }
 
 pub fn parse_ip_packet(buf: &[u8]) -> Option<(IPPacket, tcp::TcpPacket)> {
+    #[cfg(any(
+        target_os = "openbsd",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "dragonfly",
+        target_os = "macos",
+        target_os = "ios"
+    ))]
+    let buf = &buf[4..];
+    #[cfg(not(any(
+        target_os = "openbsd",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "dragonfly",
+        target_os = "macos",
+        target_os = "ios"
+    )))]
+    let buf = &buf;
+
     if buf[0] >> 4 == 4 {
         let v4 = ipv4::Ipv4Packet::new(buf)?;
         if v4.get_next_level_protocol() != ip::IpNextHeaderProtocols::Tcp {
