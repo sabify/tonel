@@ -12,26 +12,30 @@ A Multi-Stream UDP over TCP Tunneler for Lightning-Fast Network Layer 3 Transmis
 - [MTU overhead](#mtu-overhead)
   - [MTU calculation for WireGuard](#mtu-calculation-for-wireguard)
 - [Compatibility](#compatibility)
-- [Comparing Tonel to udp2raw](#comparing-tonel-to-udp2raw)
 - [Client Command Line Options](#client-command-line-options)
 - [Server Command Line Options](#server-command-line-options)
 - [License](#license)
 
 # Overview
 
-Tonel is a tool that allows for the transmission of UDP packets through multiple TCP connections. It is designed to maximize performance and minimize the amount of processing and encapsulation required for this purpose.
+Tonel is a tool that allows for the transmission of UDP packets through multiple TCP connections. **It is designed to maximize performance and minimize the amount of processing and encapsulation required for this purpose.**
 
 Tonel is a tool that is often used in situations where UDP is restricted or slowed down, but TCP is permitted. Its TCP stack is designed to work through many stateful and stateless L3/L4 firewalls and NAT devices. One advantage of using Tonel is that it avoids common issues that can degrade performance when using UDP over TCP, such as retransmissions and flow control. Despite appearing as a TCP connection to firewalls and NAT devices, Tonel still maintains the underlying UDP characteristics, including out-of-order delivery.
 
 ## Features
 
-- Tonel is fast!
-- Tonel has almost zero allocations.
-- You can adjust the number of TCP and UDP connections in the Tonel client for each client connection.
-- You can adjust the number of UDP connections in the Tonel server for each client connection.
-- You can adjust the number of TUN interface queues.
-- You can encrypt TCP connections.
-- You can configure the handshake packet for TCP connections in Tonel.
+| Features                                             |      Tonel      |
+| ---------------------------------------------------- | :-------------: |
+| Lightning fast                                       |       ✅        |
+| Multi-Stream TCP and UDP connections per each client |       ✅        |
+| Arbitrary TCP handshake content                      |       ✅        |
+| Multi-threaded and concurrency                       |       ✅        |
+| Multiple TCP queues                                  |       ✅        |
+| Encryption                                           |       ✅        |
+| IPv6                                                 |       ✅        |
+| Tunneling MTU overhead                               |    12 bytes     |
+| Layer 3 mode                                         |  TUN interface  |
+| Cross-Platform                                       | Linux and macOS |
 
 # Usage
 
@@ -52,13 +56,13 @@ Note: Be sure to consult the Tonel documentation by providing the -h switch to e
 
 ## Client
 
-First, install the Tonel client or use the latest prebuild binaries from `Releases` setion:
+First, install the Tonel client or use the latest prebuild binaries from [Releases](https://github.com/sabify/tonel/releases/latest):
 
 ```bash
-cargo install --git=https://github.com/sabify/tonel tonel --bin tonels
+cargo install --git=https://github.com/sabify/tonel --tag=v0.4.0 tonel --bin tonels
 
 # If you want faster memory allocator, you can use jemalloc (alloc-jem) or mimalloc (alloc-mi) feature like below:
-cargo install --git=https://github.com/sabify/tonel --bin tonels --features='default,alloc-mi'
+cargo install --git=https://github.com/sabify/tonel --tag=v0.4.0 --bin tonels --features='default,alloc-mi'
 ```
 
 Now, start Tonel to listen on UDP port 1111 and forward udp packet over TCP to `127.0.0.1:2222`
@@ -73,12 +77,12 @@ sudo tonelc --local 127.0.0.1:1111 --remote 127.0.0.1:2222 --auto-rule eth0
 
 ## Server
 
-First, install the Tonel server or use the latest prebuild binaries from `Releases` setion:
+First, install the Tonel server or use the latest prebuild binaries from [Releases](https://github.com/sabify/tonel/releases/latest):
 
 ```bash
-cargo install --git=https://github.com/sabify/tonel --bin tonels
+cargo install --git=https://github.com/sabify/tonel --tag=v0.4.0 --bin tonels
 # If you want faster memory allocator, you can use jemalloc (alloc-jem) or mimalloc (alloc-mi) feature like below:
-cargo install --git=https://github.com/sabify/tonel --bin tonelc --features='default,alloc-mi'
+cargo install --git=https://github.com/sabify/tonel --tag=v0.4.0 --bin tonelc --features='default,alloc-mi'
 ```
 
 Now, start Tonel to listen on TCP port 2222 and forward udp packet to `127.0.0.1:3333`
@@ -125,20 +129,7 @@ It is a good practice to reduce the MTU further to avoid packet loss, and to app
 
 # Compatibility
 
-Currently, Tonel only works on Linux operating systems. There are plans to make it cross-platform in the future. Contributions are welcome.
-
-# Comparing Tonel to udp2raw
-
-|                                          |     Tonel     |      udp2raw      |
-| ---------------------------------------- | :-----------: | :---------------: |
-| Multi-Stream TCP and UDP per each client |      ✅       |        ❌         |
-| Arbitrary TCP handshake content          |      ✅       |        ❌         |
-| Multi-threaded and concurrency           |      ✅       |        ❌         |
-| Throughput                               |   Excellent   |       Good        |
-| Layer 3 mode                             | TUN interface | Raw sockets + BPF |
-| Tunneling MTU overhead                   |   12 bytes    |     44 bytes      |
-| Encryption                               |      ✅       |        ✅         |
-| IPv6                                     |      ✅       |        ✅         |
+Currently, Tonel works on Linux and MacOS. There are plans to make it work on more platforms. Contributions are welcome.
 
 # Client Command Line Options
 
@@ -146,9 +137,10 @@ Currently, Tonel only works on Linux operating systems. There are plans to make 
 Usage: tonelc [OPTIONS] --local <IP:PORT> --remote <IP or HOST NAME:PORT>
 
 Options:
-  -l, --local <IP:PORT>                Sets the IP and port where Tonel Client listens for incoming UDP datagrams, IPv6 address need to be specified as: "[IPv6]:PORT"
-  -r, --remote <IP or HOST NAME:PORT>  Sets the address or host name and port where Tonel Client connects to Tonel Server, IPv6 address need to be specified as: "[IPv6]:PORT"
-      --tun <tunX>                     Sets the Tun interface name, if absent, pick the next available name [default: ]
+  -l, --local <IP:PORT>                Sets the IP and port where Tonel Client listens for incoming UDP datagrams,
+                                       IPv6 address need to be specified as: "[IPv6]:PORT"
+  -r, --remote <IP or HOST NAME:PORT>  Sets the address or host name and port where Tonel Client connects to Tonel Server,
+                                       IPv6 address need to be specified as: "[IPv6]:PORT"
       --tun-local <IP>                 Sets the Tun interface IPv4 local address (O/S's end) [default: 192.168.200.1]
       --tun-peer <IP>                  Sets the Tun interface IPv4 destination (peer) address (Tonel Client's end).
                                        You will need to setup SNAT/MASQUERADE rules on your Internet facing interface
@@ -158,26 +150,30 @@ Options:
       --tun-peer6 <IP>                 Sets the Tun interface IPv6 destination (peer) address (Tonel Client's end).
                                        You will need to setup SNAT/MASQUERADE rules on your Internet facing interface
                                        in order for Tonel Client to connect to Tonel Server [default: fcc8::2]
-      --handshake-packet <PATH>        Specify a file, which, after TCP handshake, its content will be sent as
-                                       the first data packet to the server.
+      --handshake-packet <PATH>        Specify a file, which, after TCP handshake, its content will be sent as the
+                                       first data packet to the server.
                                        Note: ensure this file's size does not exceed the MTU of the outgoing interface.
                                        The content is always sent out in a single packet and will not be further segmented
       --tcp-connections <number>       The number of TCP connections per each client. [default: 1]
       --udp-connections <number>       The number of UDP connections per each client. [default: 1]
       --tun-queues <number>            The number of queues for TUN interface. Default is
-                                       set to the number of CPU cores.
+                                       set to 1. The platform should support multiple queues feature. [default: 1]
       --encryption <encryption>        Specify an encryption algorithm for using in TCP connections.
                                        Server and client should use the same encryption.
                                        Currently XOR is only supported and the format should be 'xor:key'.
-      --auto-rule <interface-name>     Automatically adds and removes required iptables and sysctl rules.
+      --auto-rule <interface-name>     Automatically adds and removes required firewall and sysctl rules.
                                        The argument needs the name of an active network interface
                                        that the firewall will route the traffic over it. (e.g. eth0)
-      -d, --daemonize                  Start the process as a daemon.
+  -d, --daemonize                      Start the process as a daemon.
       --log-output <path>              Log output path. Default is stderr.
       --log-level <level>              Log output level. It could be one of the following:
-                                       off, error, warn, info, debug, trace.
-  -h, --help                           Print help information
-  -V, --version                        Print version information
+                                       off, error, warn, info, debug, trace. [default: info]
+      --tun <tunX|fd>                  Sets the Tun interface name and if it is absent, the OS
+                                       will pick the next available name.
+                                       You can also create your TUN device and
+                                       pass the int32 file descriptor to this switch.
+  -h, --help                           Print help
+  -V, --version                        Print version
 ```
 
 # Server Command Line Options
@@ -189,18 +185,21 @@ Options:
   -l, --local <PORT>                   Sets the port where Tonel Server listens for incoming Tonel Client TCP connections
   -r, --remote <IP or HOST NAME:PORT>  Sets the address or host name and port where Tonel Server forwards UDP packets to,
                                        IPv6 address need to be specified as: "[IPv6]:PORT"
-      --tun <tunX>                     Sets the Tun interface name, if absent, pick the next available name [default: ]
+      --tun <tunX|fd>                  Sets the Tun interface name and if it is absent, the OS
+                                       will pick the next available name.
+                                       You can also create your TUN device and
+                                       pass the int32 file descriptor to this switch.
       --tun-local <IP>                 Sets the Tun interface local address (O/S's end) [default: 192.168.201.1]
       --tun-peer <IP>                  Sets the Tun interface destination (peer) address (Tonel Server's end).
-                                       You will need to setup DNAT rules to this address in order for Tonel Server to
-                                       accept TCP traffic from Tonel Client [default: 192.168.201.2]
+                                       You will need to setup DNAT rules to this address in order for Tonel Server
+                                       to accept TCP traffic from Tonel Client [default: 192.168.201.2]
   -4, --ipv4-only                      Do not assign IPv6 addresses to Tun interface
       --tun-local6 <IP>                Sets the Tun interface IPv6 local address (O/S's end) [default: fcc9::1]
       --tun-peer6 <IP>                 Sets the Tun interface IPv6 destination (peer) address (Tonel Client's end).
                                        You will need to setup SNAT/MASQUERADE rules on your Internet facing interface
                                        in order for Tonel Client to connect to Tonel Server [default: fcc9::2]
-      --handshake-packet <PATH>        Specify a file, which, after TCP handshake, its content will be sent as
-                                       the first data packet to the client.
+      --handshake-packet <PATH>        Specify a file, which, after TCP handshake, its content will be sent as the
+                                       first data packet to the client.
                                        Note: ensure this file's size does not exceed the MTU of the outgoing interface.
                                        The content is always sent out in a single packet and will not be further segmented
       --encryption <encryption>        Specify an encryption algorithm for using in TCP connections.
@@ -208,16 +207,16 @@ Options:
                                        Currently XOR is only supported and the format should be 'xor:key'.
       --udp-connections <number>       The number of UDP connections per each client. [default: 1]
       --tun-queues <number>            The number of queues for TUN interface. Default is
-                                       set to the number of CPU cores.
-      --auto-rule <interface-name>     Automatically adds and removes required iptables and sysctl rules.
+                                       set to 1. The platform should support multiple queues feature. [default: 1]
+      --auto-rule <interface-name>     Automatically adds and removes required firewall and sysctl rules.
                                        The argument needs the name of an active network interface
                                        that the firewall will route the traffic over it. (e.g. eth0)
-      -d, --daemonize                  Start the process as a daemon.
-      --log-output <path>              Log output path. Default is stderr.
-      --log-level <level>              Log output level. It could be one of the following:
-                                       off, error, warn, info, debug, trace.
-  -h, --help                           Print help information
-  -V, --version                        Print version information
+  -d, --daemonize                      Start the process as a daemon.
+      --log-output <log_output>        Log output path.
+      --log-level <log_level>          Log output level. It could be one of the following:
+                                       off, error, warn, info, debug, trace. [default: info]
+  -h, --help                           Print help
+  -V, --version                        Print version
 ```
 
 # License

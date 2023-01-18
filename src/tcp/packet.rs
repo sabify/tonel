@@ -1,4 +1,12 @@
 use internet_checksum::Checksum;
+#[cfg(any(
+    target_os = "openbsd",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "dragonfly",
+    target_os = "macos",
+    target_os = "ios"
+))]
 use nix::libc::{AF_INET, AF_INET6};
 use pnet::packet::Packet;
 use pnet::packet::{ip, ipv4, ipv6, tcp};

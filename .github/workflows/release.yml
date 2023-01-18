@@ -8,7 +8,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-cross:
+  build-linux:
     runs-on: ubuntu-latest
     env:
       RUST_BACKTRACE: full
@@ -40,6 +40,38 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           use-cross: true
+          command: build
+          args: --release --target ${{ matrix.target }}
+      - name: Compress
+        run: |
+          cd target/${{ matrix.target }}/release
+          zip tonel_${{ matrix.target }}.zip tonelc tonels
+
+      - name: Upload Github Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: target/${{ matrix.target }}/release/*.zip
+          prerelease: ${{ contains(github.ref, '-') }}
+
+  build-macos:
+    runs-on: macos-latest
+    env:
+      RUST_BACKTRACE: full
+    strategy:
+      matrix:
+        target:
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
           command: build
           args: --release --target ${{ matrix.target }}
       - name: Compress

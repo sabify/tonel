@@ -11,7 +11,16 @@ use neli::{
     types::RtBuffer,
 };
 
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+#[cfg(any(
+    target_os = "openbsd",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "dragonfly",
+    target_os = "macos",
+    target_os = "ios"
+))]
+use std::net::Ipv4Addr;
+use std::net::{Ipv6Addr, SocketAddr};
 use tokio::net::UdpSocket;
 
 pub fn new_udp_reuseport(local_addr: SocketAddr) -> std::io::Result<UdpSocket> {

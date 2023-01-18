@@ -4,6 +4,14 @@ use clap::{crate_version, Arg, ArgAction, Command};
 use log::{debug, error, info, trace};
 use std::fs;
 use std::io;
+#[cfg(any(
+    target_os = "openbsd",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "dragonfly",
+    target_os = "macos",
+    target_os = "ios"
+))]
 use std::io::Write;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
@@ -14,7 +22,7 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 use tonel::tcp::packet::MAX_PACKET_LEN;
 use tonel::tcp::{Socket, Stack};
-use tonel::utils::new_udp_reuseport;
+use tonel::utils::{assign_ipv6_address, new_udp_reuseport};
 use tonel::Encryption;
 use tun::Device;
 
@@ -180,8 +188,7 @@ fn main() {
                 .help("Log output level. It could be one of the following:\n\
                     off, error, warn, info, debug, trace.")
         )
-
-    .arg(
+        .arg(
         Arg::new("tun")
             .long("tun")
             .required(false)
@@ -343,9 +350,9 @@ async fn main_async(matches: ArgMatches) -> io::Result<()> {
             target_os = "dragonfly",
             target_os = "macos",
         ))]
-        tonel::utils::assign_ipv6_address(tun.name(), tun_local6.unwrap());
+        assign_ipv6_address(tun.name(), tun_local6.unwrap());
         #[cfg(any(target_os = "linux", target_os = "android"))]
-        tonel::utils::assign_ipv6_address(tun.name(), tun_local6.unwrap(), tun_peer6.unwrap());
+        assign_ipv6_address(tun.name(), tun_local6.unwrap(), tun_peer6.unwrap());
     }
 
     let exit_fn: Box<dyn Fn() + 'static + Send> = if let Some(dev_name) =
