@@ -241,12 +241,14 @@ async fn main_async(matches: ArgMatches) -> io::Result<()> {
         (None, None)
     } else {
         (
-            matches
-                .get_one::<String>("tun_local6")
-                .map(|v| v.parse().expect("bad local address for Tun interface")),
-            matches
-                .get_one::<String>("tun_peer6")
-                .map(|v| v.parse().expect("bad peer address for Tun interface")),
+            matches.get_one::<String>("tun_local6").map(|v| {
+                v.parse::<Ipv6Addr>()
+                    .expect("bad local address for Tun interface")
+            }),
+            matches.get_one::<String>("tun_peer6").map(|v| {
+                v.parse::<Ipv6Addr>()
+                    .expect("bad peer address for Tun interface")
+            }),
         )
     };
 
@@ -506,8 +508,13 @@ async fn main_async(matches: ArgMatches) -> io::Result<()> {
 
     info!("Created TUN device {}", tun.name());
 
-    if let (Some(tun_local6), Some(tun_peer6)) = (tun_local6, tun_peer6) {
-        assign_ipv6_address(tun.name(), tun_local6, tun_peer6);
+    if let (Some(tun_local6), Some(_tun_peer6)) = (tun_local6, tun_peer6) {
+        assign_ipv6_address(
+            tun.name(),
+            tun_local6,
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            _tun_peer6,
+        );
         info!("IPv6 assigned to {}", tun.name());
     }
 

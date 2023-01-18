@@ -40,13 +40,16 @@ dashmap = "5.4.0"
 zeroize = "1.5.7"
 tokio-util = "0.7"
 env_logger = "0.10.0"
-neli = "0.6"
 nix = "0.26"
 ctrlc = { version = "3.0", features = ["termination"] }
 cfg-if = "1.0"
 mimalloc = { version = "0.1", default-features = false, optional = true }
+
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 jemallocator = { version = "0.5", optional = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+neli = "0.6"
 
 [features]
 default = []
