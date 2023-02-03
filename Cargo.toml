@@ -26,7 +26,7 @@ clap = { version = "4.0", features = ["cargo", "string"] }
 socket2 = { version = "0.4", features = ["all"] }
 tokio = { version = "1", features = ["full"] }
 bytes = "1"
-pnet = "0.31"
+pnet = "0.33"
 log = "0.4"
 internet-checksum = "0.2"
 object-pool = "0.5"
