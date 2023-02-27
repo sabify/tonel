@@ -33,7 +33,7 @@ object-pool = "0.5"
 once_cell = "1.17.0"
 tun = { git = "https://github.com/sabify/rust-tun", features = ["async"] }
 kanal = { git = "https://github.com/fereidani/kanal" }
-daemonize = "0.4.1"
+daemonize = "0.5.0"
 fastrand = "1.8.0"
 fxhash = "0.2.1"
 dashmap = "5.4.0"
