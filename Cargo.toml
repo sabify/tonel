@@ -23,7 +23,7 @@ path = "src/bin/server.rs"
 
 [dependencies]
 clap = { version = "4.0", features = ["cargo", "string"] }
-socket2 = { version = "0.4", features = ["all"] }
+socket2 = { version = "0.5", features = ["all"] }
 tokio = { version = "1", features = ["full"] }
 bytes = "1"
 pnet = "0.31"
