@@ -153,7 +153,12 @@ impl Socket {
         self.remote_addr
     }
 
-    fn build_tcp_packet(&self, buf: &mut [u8], flags: u16, payload: Option<&[u8]>) -> usize {
+    fn build_tcp_packet(
+        &self,
+        buf: &mut [u8],
+        flags: u16,
+        payload: Option<&[u8]>,
+    ) -> Result<usize, String> {
         let ack = self.ack.load(Ordering::Relaxed);
 
         build_tcp_packet(
@@ -177,7 +182,14 @@ impl Socket {
     pub async fn send(&self, buf: &mut [u8], payload: &[u8]) -> Option<()> {
         match self.state {
             State::Established => {
-                let size = self.build_tcp_packet(buf, tcp::TcpFlags::ACK, Some(payload));
+                let result = self.build_tcp_packet(buf, tcp::TcpFlags::ACK, Some(payload));
+                let size = match result {
+                    Ok(size) => size,
+                    Err(err) => {
+                        error!("Building TCP Packet error on {}: {err}", self.local_addr);
+                        return None;
+                    }
+                };
                 self.seq.fetch_add(payload.len() as u32, Ordering::Relaxed);
                 self.tun.send(&buf[..size]).await.ok().and(Some(()))
             }
@@ -197,8 +209,8 @@ impl Socket {
                     0,
                     tcp::TcpFlags::ACK,
                     None,
-                );
-
+                )
+                .unwrap();
                 self.tun.send(&buf[..size]).await.ok().and(Some(()))
             }
             _ => unreachable!(),
@@ -291,8 +303,9 @@ impl Socket {
         loop {
             match self.state {
                 State::Idle => {
-                    let size =
-                        self.build_tcp_packet(buf, tcp::TcpFlags::SYN | tcp::TcpFlags::ACK, None);
+                    let size = self
+                        .build_tcp_packet(buf, tcp::TcpFlags::SYN | tcp::TcpFlags::ACK, None)
+                        .unwrap();
                     // ACK set by constructor
                     if let Err(err) = self.tun.send(&buf[..size]).await {
                         trace!("Sent SYN + ACK error: {err}");
@@ -359,7 +372,9 @@ impl Socket {
         loop {
             match self.state {
                 State::Idle => {
-                    let size = self.build_tcp_packet(buf, tcp::TcpFlags::SYN, None);
+                    let size = self
+                        .build_tcp_packet(buf, tcp::TcpFlags::SYN, None)
+                        .unwrap();
                     if let Err(err) = self.tun.send(&buf[..size]).await {
                         trace!("Send SYN error: {err}");
                         return None;
@@ -409,7 +424,10 @@ impl Socket {
                             .store(tcp_packet.get_sequence() + 1, Ordering::Release);
 
                         // send ACK to finish handshake
-                        let size = self.build_tcp_packet(buf, tcp::TcpFlags::ACK, None);
+                        let size = self
+                            .build_tcp_packet(buf, tcp::TcpFlags::ACK, None)
+                            .unwrap();
+
                         if let Err(err) = self.tun.send(&buf[..size]).await {
                             trace!("Send ACK error: {err}");
                             break;
@@ -450,7 +468,8 @@ impl Drop for Socket {
             0,
             tcp::TcpFlags::RST,
             None,
-        );
+        )
+        .unwrap();
         tokio::spawn(async move {
             for tx in tuples_purge.iter() {
                 if let Err(err) = tx.send(tuple.clone()).await {
@@ -678,7 +697,7 @@ impl Stack {
                             tcp_packet.get_sequence() + tcp_packet.payload().len() as u32,
                             tcp::TcpFlags::RST | tcp::TcpFlags::ACK,
                             None,
-                        );
+                        ).unwrap();
                         let tun_index = shared.tun_index.fetch_add(1, Ordering::Relaxed) % shared.tuns.len();
                         let tun = shared.tuns[tun_index].clone();
                         if let Err(err) = tun.send(&send_buf[..size]).await {

@@ -1,4 +1,5 @@
 use internet_checksum::Checksum;
+use log::error;
 #[cfg(any(
     target_os = "openbsd",
     target_os = "freebsd",
@@ -65,7 +66,7 @@ pub fn build_tcp_packet(
     ack: u32,
     flags: u16,
     payload: Option<&[u8]>,
-) -> usize {
+) -> Result<usize, String> {
     let ip_header_len = match local_addr {
         SocketAddr::V4(_) => IPV4_HEADER_LEN,
         SocketAddr::V6(_) => IPV6_HEADER_LEN,
@@ -93,7 +94,18 @@ pub fn build_tcp_packet(
     ))]
     let offset = 4;
 
-    buf[..total_len].zeroize();
+    // check only if the payload is provided to check the buffer's space sufficiecy
+    if payload.is_some() {
+        if total_len + offset > buf.len() {
+            return Err(format!(
+                "Provided buffer does not have sufficent space: buffer size: {}, total length: {}",
+                buf.len(),
+                total_len + offset
+            ));
+        }
+    }
+
+    buf[..total_len + offset].zeroize();
 
     match (local_addr, remote_addr) {
         (SocketAddr::V4(local), SocketAddr::V4(remote)) => {
@@ -192,7 +204,7 @@ pub fn build_tcp_packet(
     cksm.add_bytes(tcp.packet());
     tcp.set_checksum(u16::from_be_bytes(cksm.checksum()));
 
-    total_len + offset
+    Ok(total_len + offset)
 }
 
 pub fn parse_ip_packet(buf: &[u8]) -> Option<(IPPacket, tcp::TcpPacket)> {

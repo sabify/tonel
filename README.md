@@ -24,18 +24,18 @@ Tonel is a tool that is often used in situations where UDP is restricted or slow
 
 ## Features
 
-| Features                                             |      Tonel      |
-| ---------------------------------------------------- | :-------------: |
-| Lightning fast                                       |       ✅        |
-| Multi-Stream TCP and UDP connections per each client |       ✅        |
-| Arbitrary TCP handshake content                      |       ✅        |
-| Multi-threaded and concurrency                       |       ✅        |
-| Multiple TCP queues                                  |       ✅        |
-| Encryption                                           |       ✅        |
-| IPv6                                                 |       ✅        |
-| Tunneling MTU overhead                               |    12 bytes     |
-| Layer 3 mode                                         |  TUN interface  |
-| Cross-Platform                                       | Linux and macOS |
+| Features                                             |             Tonel              |
+| ---------------------------------------------------- | :----------------------------: |
+| Lightning fast                                       |               ✅               |
+| Multi-Stream TCP and UDP connections per each client |               ✅               |
+| Arbitrary TCP handshake content                      |               ✅               |
+| Multi-threaded and concurrency                       |               ✅               |
+| Multiple TCP queues                                  |               ✅               |
+| Encryption                                           |               ✅               |
+| IPv6                                                 |               ✅               |
+| Tunneling MTU overhead                               | Only required IPv4/IPv6 header |
+| Layer 3 mode                                         |         TUN interface          |
+| Cross-Platform                                       |        Linux and macOS         |
 
 # Usage
 
