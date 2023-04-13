@@ -22,26 +22,26 @@ name = "tonels"
 path = "src/bin/server.rs"
 
 [dependencies]
-clap = { version = "4.0", features = ["cargo", "string"] }
-socket2 = { version = "0.4", features = ["all"] }
+clap = { version = "4.2", features = ["cargo", "string"] }
+socket2 = { version = "0.5.2", features = ["all"] }
 tokio = { version = "1", features = ["full"] }
 bytes = "1"
-pnet = "0.31"
+pnet = "0.33"
 log = "0.4"
 internet-checksum = "0.2"
 object-pool = "0.5"
-once_cell = "1.17.0"
+once_cell = "1.17.1"
 tun = { git = "https://github.com/sabify/rust-tun", features = ["async"] }
 kanal = { git = "https://github.com/fereidani/kanal" }
-daemonize = "0.4.1"
-fastrand = "1.8.0"
+daemonize = "0.5.0"
+fastrand = "1.9.0"
 fxhash = "0.2.1"
 dashmap = "5.4.0"
-zeroize = "1.5.7"
+zeroize = "1.6.0"
 tokio-util = "0.7"
 env_logger = "0.10.0"
 nix = "0.26"
-ctrlc = { version = "3.0", features = ["termination"] }
+ctrlc = { version = "3.2", features = ["termination"] }
 cfg-if = "1.0"
 mimalloc = { version = "0.1", default-features = false, optional = true }
 
