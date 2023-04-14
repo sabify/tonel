@@ -1,5 +1,4 @@
 use internet_checksum::Checksum;
-use log::error;
 #[cfg(any(
     target_os = "openbsd",
     target_os = "freebsd",
@@ -94,15 +93,12 @@ pub fn build_tcp_packet(
     ))]
     let offset = 4;
 
-    // check only if the payload is provided to check the buffer's space sufficiecy
-    if payload.is_some() {
-        if total_len + offset > buf.len() {
-            return Err(format!(
-                "Provided buffer does not have sufficent space: buffer size: {}, total length: {}",
-                buf.len(),
-                total_len + offset
-            ));
-        }
+    if total_len + offset > buf.len() {
+        return Err(format!(
+            "Provided buffer does not have sufficent space: buffer size: {}, total length: {}",
+            buf.len(),
+            total_len + offset
+        ));
     }
 
     buf[..total_len + offset].zeroize();
