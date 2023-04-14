@@ -59,10 +59,10 @@ Note: Be sure to consult the Tonel documentation by providing the -h switch to e
 First, install the Tonel client or use the latest prebuild binaries from [Releases](https://github.com/sabify/tonel/releases/latest):
 
 ```bash
-cargo install --git=https://github.com/sabify/tonel --tag=v0.5.0 tonel --bin tonels
+cargo install tonel --bin tonels
 
 # If you want faster memory allocator, you can use jemalloc (alloc-jem) or mimalloc (alloc-mi) feature like below:
-cargo install --git=https://github.com/sabify/tonel --tag=v0.5.0 --bin tonels --features='default,alloc-mi'
+cargo install tonel --bin tonels --features='default,alloc-mi'
 ```
 
 Now, start Tonel to listen on UDP port 1111 and forward udp packet over TCP to `127.0.0.1:2222`
@@ -80,9 +80,9 @@ sudo tonelc --local 127.0.0.1:1111 --remote 127.0.0.1:2222 --auto-rule eth0
 First, install the Tonel server or use the latest prebuild binaries from [Releases](https://github.com/sabify/tonel/releases/latest):
 
 ```bash
-cargo install --git=https://github.com/sabify/tonel --tag=v0.5.0 --bin tonels
+cargo install tonel --bin tonels
 # If you want faster memory allocator, you can use jemalloc (alloc-jem) or mimalloc (alloc-mi) feature like below:
-cargo install --git=https://github.com/sabify/tonel --tag=v0.5.0 --bin tonelc --features='default,alloc-mi'
+cargo install tonel --bin tonelc --features='default,alloc-mi'
 ```
 
 Now, start Tonel to listen on TCP port 2222 and forward udp packet to `127.0.0.1:3333`
