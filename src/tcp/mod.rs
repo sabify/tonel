@@ -46,6 +46,7 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::time;
 
 const TIMEOUT: time::Duration = time::Duration::from_secs(3);
@@ -84,6 +85,7 @@ struct Shared {
     tun_index: AtomicUsize,
     ready: kanal::AsyncSender<(Socket, u16)>,
     tuples_purge: Arc<Vec<kanal::AsyncSender<AddrTuple>>>,
+    timeout: Option<u64>,
 }
 
 pub struct Stack {
@@ -109,6 +111,7 @@ pub struct Socket {
     seq: AtomicU32,
     ack: AtomicU32,
     state: State,
+    timeout: tokio::time::Instant,
 }
 
 /// A socket that represents a unique TCP connection between a server and client.
@@ -130,6 +133,10 @@ impl Socket {
     ) -> (Socket, SocketAsyncSender) {
         let (incoming_tx, incoming_rx) = kanal::bounded_async(MPMC_BUFFER_LEN);
 
+        let timeout = shared.timeout.map_or_else(
+            || tokio::time::Instant::now() + Duration::from_secs(86400 * 365),
+            |f| tokio::time::Instant::now() + Duration::from_secs(f),
+        );
         (
             Socket {
                 shared,
@@ -140,6 +147,7 @@ impl Socket {
                 seq: AtomicU32::new(seq),
                 ack: AtomicU32::new(ack),
                 state,
+                timeout,
             },
             incoming_tx,
         )
@@ -225,34 +233,43 @@ impl Socket {
     /// A return of `None` means the TCP connection is broken
     /// and this socket must be closed.
     pub async fn recv(&self, buf: &mut [u8]) -> Option<usize> {
+        let timeout = tokio::time::sleep(self.timeout.duration_since(tokio::time::Instant::now()));
+        tokio::pin!(timeout);
+
         for _ in 0..3 {
             let mut seq_sent = false;
             loop {
                 match self.state {
                     State::Established => {
-                        let res = time::timeout(TIMEOUT, self.incoming.recv()).await;
-                        let raw_buf = match res {
-                            Ok(raw_buf) => match raw_buf {
-                                Ok(raw_buf) => raw_buf,
-                                Err(err) => {
-                                    error!("Incoming channel recv error: {err}");
-                                    return None;
+                        let raw_buf = tokio::select! {
+                            res = time::timeout(TIMEOUT, self.incoming.recv()) => {
+                                match res {
+                                    Ok(raw_buf) => match raw_buf {
+                                        Ok(raw_buf) => raw_buf,
+                                        Err(err) => {
+                                            error!("Incoming channel recv error: {err}");
+                                            return None;
+                                        }
+                                    },
+                                    Err(err) => {
+                                        if seq_sent {
+                                            break;
+                                        }
+                                        trace!("Waiting for tcp recv timed out: {err}, sending ACK");
+                                        if self.send_keepalive(buf, 0).await.is_none() {
+                                            trace!("Connection {} unable to send idling ACK back", self);
+                                            return None;
+                                        }
+                                        seq_sent = true;
+                                        continue;
+                                    }
                                 }
-                            },
-                            Err(err) => {
-                                if seq_sent {
-                                    break;
-                                }
-                                trace!("Waiting for tcp recv timed out: {err}, sending ACK");
-                                if self.send_keepalive(buf, 0).await.is_none() {
-                                    trace!("Connection {} unable to send idling ACK back", self);
-                                    return None;
-                                }
-                                seq_sent = true;
-                                continue;
+
+                            }
+                            _ = &mut timeout => {
+                                return None;
                             }
                         };
-
                         let (_v4_packet, tcp_packet) =
                             match parse_ip_packet(&raw_buf.0[..raw_buf.1]) {
                                 Some(packet) => packet,
@@ -509,7 +526,12 @@ impl Stack {
     /// When more than one [`Tun`](tokio_tun::Tun) object is passed in, same amount
     /// of reader will be spawned later. This allows user to utilize the performance
     /// benefit of Multiqueue Tun support on machines with SMP.
-    pub fn new<T>(tuns: T, local_ip: Ipv4Addr, local_ip6: Option<Ipv6Addr>) -> Stack
+    pub fn new<T>(
+        tuns: T,
+        local_ip: Ipv4Addr,
+        local_ip6: Option<Ipv6Addr>,
+        timeout: Option<u64>,
+    ) -> Stack
     where
         T: tun::Device<Queue = tun::platform::Queue>,
     {
@@ -536,6 +558,7 @@ impl Stack {
             listening: DashSet::default(),
             ready: ready_tx,
             tuples_purge: Arc::new(tuples_purge_tx),
+            timeout,
         });
 
         for (index, rx) in tuples_purge_rx.into_iter().enumerate() {
