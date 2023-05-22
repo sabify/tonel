@@ -22,8 +22,8 @@ name = "tonels"
 path = "src/bin/server.rs"
 
 [dependencies]
-clap = { version = "4.2", features = ["cargo", "string"] }
-socket2 = { version = "0.5.2", features = ["all"] }
+clap = { version = "4.3", features = ["cargo", "string"] }
+socket2 = { version = "0.5.3", features = ["all"] }
 tokio = { version = "1", features = ["full"] }
 bytes = "1"
 pnet = "0.33"
@@ -41,7 +41,7 @@ zeroize = "1.6.0"
 tokio-util = "0.7"
 env_logger = "0.10.0"
 nix = "0.26"
-ctrlc = { version = "3.2", features = ["termination"] }
+ctrlc = { version = "3.3", features = ["termination"] }
 cfg-if = "1.0"
 mimalloc = { version = "0.1", default-features = false, optional = true }
 
