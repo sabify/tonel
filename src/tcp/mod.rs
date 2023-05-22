@@ -51,15 +51,15 @@ use tokio::time;
 
 const TIMEOUT: time::Duration = time::Duration::from_secs(3);
 // const RETRIES: usize = 2;
-const MPMC_BUFFER_LEN: usize = 4096;
-const MPSC_BUFFER_LEN: usize = 4096;
+const MPMC_BUFFER_LEN: usize = 1024 * 64;
+const MPSC_BUFFER_LEN: usize = 1024 * 8;
 
 type SocketAsyncSender = kanal::AsyncSender<(
-    object_pool::Reusable<'static, Box<[u8; MAX_PACKET_LEN]>>,
+    opool::RefGuard<'static, ObjectPoolAllocator, Box<[u8; MAX_PACKET_LEN]>>,
     usize,
 )>;
 type SocketAsyncReceiver = kanal::AsyncReceiver<(
-    object_pool::Reusable<'static, Box<[u8; MAX_PACKET_LEN]>>,
+    opool::RefGuard<'static, ObjectPoolAllocator, Box<[u8; MAX_PACKET_LEN]>>,
     usize,
 )>;
 
@@ -513,12 +513,26 @@ impl fmt::Display for Socket {
 }
 
 use once_cell::sync::Lazy;
+use opool::PoolAllocator;
 
-static GLOBAL_PACKET_POOL: Lazy<object_pool::Pool<Box<[u8; MAX_PACKET_LEN]>>> = Lazy::new(|| {
-    let pool: object_pool::Pool<Box<[u8; MAX_PACKET_LEN]>> =
-        object_pool::Pool::new(MPMC_BUFFER_LEN, || Box::new([0u8; MAX_PACKET_LEN]));
-    pool
-});
+struct ObjectPoolAllocator;
+impl PoolAllocator<Box<[u8; MAX_PACKET_LEN]>> for ObjectPoolAllocator {
+    #[inline]
+    fn allocate(&self) -> Box<[u8; MAX_PACKET_LEN]> {
+        Box::new([0u8; MAX_PACKET_LEN])
+    }
+
+    #[inline]
+    fn reset(&self, _obj: &mut Box<[u8; MAX_PACKET_LEN]>) {}
+
+    #[inline]
+    fn is_valid(&self, _obj: &Box<[u8; MAX_PACKET_LEN]>) -> bool {
+        true
+    }
+}
+
+static GLOBAL_PACKET_POOL: Lazy<opool::Pool<ObjectPoolAllocator, Box<[u8; MAX_PACKET_LEN]>>> =
+    Lazy::new(|| opool::Pool::new(MPMC_BUFFER_LEN, ObjectPoolAllocator));
 
 /// A userspace TCP state machine
 impl Stack {
@@ -639,7 +653,7 @@ impl Stack {
 
         let mut send_buf = [0u8; MAX_PACKET_LEN];
         loop {
-            let mut recv_buf = GLOBAL_PACKET_POOL.pull(|| Box::new([0u8; MAX_PACKET_LEN]));
+            let mut recv_buf = GLOBAL_PACKET_POOL.get();
 
             tokio::select! {
                 biased;
