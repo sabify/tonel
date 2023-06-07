@@ -47,6 +47,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::net::UdpSocket;
 use tokio::time;
 
 const TIMEOUT: time::Duration = time::Duration::from_secs(3);
@@ -85,7 +86,7 @@ struct Shared {
     tun_index: AtomicUsize,
     ready: kanal::AsyncSender<(Socket, u16)>,
     tuples_purge: Arc<Vec<kanal::AsyncSender<AddrTuple>>>,
-    timeout: Option<u64>,
+    deadline: Option<u64>,
 }
 
 pub struct Stack {
@@ -103,6 +104,7 @@ pub enum State {
 }
 
 pub struct Socket {
+    _reserved_socket: Option<UdpSocket>,
     shared: Arc<Shared>,
     tun: Arc<tun::AsyncQueue>,
     incoming: SocketAsyncReceiver,
@@ -111,7 +113,7 @@ pub struct Socket {
     seq: AtomicU32,
     ack: AtomicU32,
     state: State,
-    timeout: tokio::time::Instant,
+    deadline: tokio::time::Instant,
 }
 
 /// A socket that represents a unique TCP connection between a server and client.
@@ -123,6 +125,7 @@ pub struct Socket {
 /// out of scope.
 impl Socket {
     fn new(
+        _reserved_socket: Option<UdpSocket>,
         shared: Arc<Shared>,
         tun: Arc<tun::AsyncQueue>,
         local_addr: SocketAddr,
@@ -133,12 +136,13 @@ impl Socket {
     ) -> (Socket, SocketAsyncSender) {
         let (incoming_tx, incoming_rx) = kanal::bounded_async(MPMC_BUFFER_LEN);
 
-        let timeout = shared.timeout.map_or_else(
+        let deadline = shared.deadline.map_or_else(
             || tokio::time::Instant::now() + Duration::from_secs(86400 * 365),
             |f| tokio::time::Instant::now() + Duration::from_secs(f),
         );
         (
             Socket {
+                _reserved_socket,
                 shared,
                 tun,
                 incoming: incoming_rx,
@@ -147,7 +151,7 @@ impl Socket {
                 seq: AtomicU32::new(seq),
                 ack: AtomicU32::new(ack),
                 state,
-                timeout,
+                deadline,
             },
             incoming_tx,
         )
@@ -233,8 +237,9 @@ impl Socket {
     /// A return of `None` means the TCP connection is broken
     /// and this socket must be closed.
     pub async fn recv(&self, buf: &mut [u8]) -> Option<usize> {
-        let timeout = tokio::time::sleep(self.timeout.duration_since(tokio::time::Instant::now()));
-        tokio::pin!(timeout);
+        let deadline =
+            tokio::time::sleep(self.deadline.duration_since(tokio::time::Instant::now()));
+        tokio::pin!(deadline);
 
         for _ in 0..3 {
             let mut seq_sent = false;
@@ -266,7 +271,7 @@ impl Socket {
                                 }
 
                             }
-                            _ = &mut timeout => {
+                            _ = &mut deadline => {
                                 return None;
                             }
                         };
@@ -515,6 +520,8 @@ impl fmt::Display for Socket {
 use once_cell::sync::Lazy;
 use opool::PoolAllocator;
 
+use crate::utils::new_udp_reuseport;
+
 struct ObjectPoolAllocator;
 impl PoolAllocator<Box<[u8; MAX_PACKET_LEN]>> for ObjectPoolAllocator {
     #[inline]
@@ -572,7 +579,7 @@ impl Stack {
             listening: DashSet::default(),
             ready: ready_tx,
             tuples_purge: Arc::new(tuples_purge_tx),
-            timeout,
+            deadline: timeout,
         });
 
         for (index, rx) in tuples_purge_rx.into_iter().enumerate() {
@@ -605,43 +612,44 @@ impl Stack {
         addr: SocketAddr,
         seq: u32,
     ) -> Option<(Socket, u16)> {
-        for _ in 1024..u16::MAX {
-            let mut local_port = fastrand::u16(1024..);
-            if local_port < u16::MAX - 1024 {
-                local_port += 1024;
-            }
-
-            let local_addr = SocketAddr::new(
-                if addr.is_ipv4() {
-                    IpAddr::V4(self.local_ip)
-                } else {
-                    IpAddr::V6(self.local_ip6.expect("IPv6 local address undefined"))
-                },
-                local_port,
-            );
-            let tuple = AddrTuple::new(local_addr, addr);
-            let mut sock = match self.shared.tuples.entry(tuple) {
-                Entry::Occupied(_) => continue,
-                Entry::Vacant(v) => {
-                    let tun_index = self.shared.tun_index.fetch_add(1, Ordering::AcqRel)
-                        % self.shared.tuns.len();
-                    let tun = self.shared.tuns[tun_index].clone();
-                    let (sock, incoming) = Socket::new(
-                        self.shared.clone(),
-                        tun,
-                        local_addr,
-                        addr,
-                        seq,
-                        0,
-                        State::Idle,
-                    );
-                    v.insert(incoming);
-                    sock
+        let socket =
+            match new_udp_reuseport(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0)) {
+                Ok(socket) => socket,
+                Err(err) => {
+                    error!("failed creating new socket: {err}");
+                    return None;
                 }
             };
-            return sock.connect(buf).await.map(|port| (sock, port));
-        }
-        None
+        let local_addr = SocketAddr::new(
+            if addr.is_ipv4() {
+                IpAddr::V4(self.local_ip)
+            } else {
+                IpAddr::V6(self.local_ip6.expect("IPv6 local address undefined"))
+            },
+            socket.local_addr().unwrap().port(),
+        );
+        let tuple = AddrTuple::new(local_addr, addr);
+        let mut sock = match self.shared.tuples.entry(tuple) {
+            Entry::Occupied(_) => return None,
+            Entry::Vacant(v) => {
+                let tun_index =
+                    self.shared.tun_index.fetch_add(1, Ordering::AcqRel) % self.shared.tuns.len();
+                let tun = self.shared.tuns[tun_index].clone();
+                let (sock, incoming) = Socket::new(
+                    Some(socket),
+                    self.shared.clone(),
+                    tun,
+                    local_addr,
+                    addr,
+                    seq,
+                    0,
+                    State::Idle,
+                );
+                v.insert(incoming);
+                sock
+            }
+        };
+        sock.connect(buf).await.map(|port| (sock, port))
     }
 
     async fn reader_task(
@@ -709,6 +717,7 @@ impl Stack {
                     {
                         // SYN seen on listening socket
                         let (sock, incoming) = Socket::new(
+                            None,
                             shared.clone(),
                             tun.clone(),
                             local_addr,

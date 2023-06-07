@@ -191,11 +191,11 @@ fn main() {
                     off, error, warn, info, debug, trace.")
         )
         .arg(
-            Arg::new("timeout")
-                .long("timeout")
+            Arg::new("deadline")
+                .long("deadline")
                 .required(false)
-                .value_name("timeout")
-                .help("Set timeout for connections in seconds. Default is disabled.")
+                .value_name("deadline")
+                .help("An open connection will be closed focibly after provided seconds. Default is disabled.")
         )
         .get_matches();
 
@@ -402,11 +402,11 @@ async fn main_async(matches: ArgMatches) -> io::Result<()> {
     })
     .expect("Error setting Ctrl-C handler");
 
-    let timeout = matches
-        .get_one::<String>("timeout")
+    let deadline = matches
+        .get_one::<String>("deadline")
         .map(|f| f.parse::<u64>().unwrap());
 
-    let mut stack = Stack::new(tun, tun_local, tun_local6, timeout);
+    let mut stack = Stack::new(tun, tun_local, tun_local6, deadline);
     stack.listen(local_port);
     info!("Listening on {}", local_port);
 
